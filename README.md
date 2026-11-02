@@ -103,7 +103,8 @@ review uses Claude, and it is kept lean:
   non-code files (README, lockfile) changed, skips it and says so.
 - Unchanged repos are not rescanned. Repeat scans of a repo review only what changed.
 - It starts with just the tools it needs (no skill list, no MCP servers), which cuts the fixed
-  overhead per run by roughly 85%. Each run prints the tokens and cost it used.
+  overhead per run from about 36k to about 8k tokens (cost $0.28 to under $0.04, measured with a
+  trivial prompt). Each run prints the tokens and cost it used.
 - `--no-ai` skips it entirely.
 
 ## Safety
