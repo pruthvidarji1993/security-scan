@@ -1,0 +1,7 @@
+{
+  "roots": ["~/Projects/active"],
+  "exclude": ["superpowers", "Claude-Code-Agent-Monitor", "security-scan"],
+  "max_repos_per_run": 10,
+  "review_timeout_sec": 1500,
+  "ai_review": true
+}
