@@ -9,20 +9,28 @@ Built on the `secure-review` skill in [`skill/`](skill/secure-review/SKILL.md).
 
 ## Quick start
 
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/pruthvidarji1993/security-scan/main/run.sh) /path/to/project
-```
-
-Run it with no path to scan the current directory. The script clones this repo to
-`~/.cache/security-scan`, updates it on every run, and scans the project. Nothing is
-added to, edited in, or committed to the scanned project.
-
-Or from a clone:
+Run this from inside your project (a git repo with at least one commit):
 
 ```bash
-git clone https://github.com/pruthvidarji1993/security-scan.git
-./security-scan/run.sh /path/to/project
+bash <(curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/pruthvidarji1993/security-scan/contents/run.sh)
 ```
+
+Or pass a path: append `/path/to/project`. Flags go after it: `--no-open`, `--no-ai`.
+
+The script clones this repo to `~/.cache/security-scan`, updates it on every run, and scans
+the project. Nothing is added to, edited in, or committed to the scanned project. You do not
+need to edit any config or have write access to this repo.
+
+If `curl` fails (it prints an error but the command still exits 0), use git instead:
+
+```bash
+git clone https://github.com/pruthvidarji1993/security-scan.git ~/.cache/security-scan 2>/dev/null \
+  || git -C ~/.cache/security-scan pull -q --ff-only
+~/.cache/security-scan/run.sh /path/to/project
+```
+
+The one-liner uses the GitHub API (60 requests per hour per IP without a token). Behind a
+shared office network, prefer the git version.
 
 **Needs:** `python3` 3.10+ and `git`. Scanners install themselves on first use into
 `~/.cache/secure-review`. The AI review needs the `claude` CLI, logged in; without it
