@@ -1,5 +1,7 @@
 # security-scan
 
+![security-scan: one command security scan for any project](docs/social-preview.png)
+
 Stack-aware security review for any project, with zero per-project setup. Point it
 at a repo and it detects the stack (Next.js, React, Node API, Django, Flask,
 FastAPI, PHP/Laravel, React Native, Docker), runs the right scanners, adds an AI
