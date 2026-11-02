@@ -175,7 +175,10 @@ def main():
     print(f"done: {scanned} scanned, {len(rows)} repos seen -> {day_dir}/SUMMARY.md")
     opener = {"darwin": "open", "linux": "xdg-open"}.get(sys.platform)
     for p in html_reports:  # explicit runs only; scheduled runs just notify
-        print(f"report: {p}")
+        findings = p.parent / "findings.txt"
+        if findings.exists():
+            print(f"\n=== {p.parent.name} ===\n{findings.read_text().strip()}")
+        print(f"\nreport: {p}")
         if opener and "--no-open" not in sys.argv and p.exists():
             subprocess.run([opener, str(p)], capture_output=True)
     if sys.platform == "darwin":

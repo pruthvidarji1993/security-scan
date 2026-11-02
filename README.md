@@ -36,6 +36,27 @@ When you scan one project, `report.html` opens in your browser automatically and
 path is printed. Add `--no-open` to skip that. Scheduled runs do not open anything;
 they show a notification, and you read `SUMMARY.md`.
 
+## What you get
+
+The terminal shows the findings list, then the report opens in your browser:
+
+```
+=== nextjs ===
+overall risk: Critical
+[CRITICAL] app/api/orders/[id]/route.ts:2 - Unauthenticated IDOR: any order readable by id - ...
+[CRITICAL] app/api/orders/[id]/route.ts:3 - SQL injection via order id - Use a parameterised query ...
+
+report: ~/.cache/security-scan/reports/2026-11-02_1311/nextjs/report.html
+```
+
+![Sample security report](docs/sample-report.png)
+
+The report is one self-contained HTML file (light and dark, prints to PDF, safe to email):
+executive summary, counts by severity, remediation roadmap, OWASP Top 10 coverage, and each
+finding with the exploit and the fix. [Download a sample](docs/sample-report.html) (generated
+from a small demo project with a seeded flaw). If you see `UNVERIFIED (scanner only)`, the AI
+review did not run, so findings are raw scanner output.
+
 ## Scan many projects on a schedule
 
 ```bash
