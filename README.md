@@ -94,6 +94,18 @@ the config and always does a full scan of that path.
 `./setup.sh` links the skill into `~/.claude/skills`, so `/secure-review [diff|full|deps]`
 works in any project.
 
+## Token use
+
+Scanners (semgrep, gitleaks, bandit and so on) run locally and cost no tokens. Only the AI
+review uses Claude, and it is kept lean:
+
+- It runs only when there is source code to read. No source files, or a repeat scan where only
+  non-code files (README, lockfile) changed, skips it and says so.
+- Unchanged repos are not rescanned. Repeat scans of a repo review only what changed.
+- It starts with just the tools it needs (no skill list, no MCP servers), which cuts the fixed
+  overhead per run by roughly 85%. Each run prints the tokens and cost it used.
+- `--no-ai` skips it entirely.
+
 ## Safety
 
 - Scans local checkouts only. It never pulls, edits or commits to them.
