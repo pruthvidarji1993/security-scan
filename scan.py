@@ -144,7 +144,8 @@ def main():
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        sys.exit("another scan is running")
+        sys.exit("[security-scan] a scan is already running (started earlier, maybe in another "
+                 "terminal). Wait for it to finish, then run again.")
     day_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_json(STATE, {})
