@@ -145,7 +145,8 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         sys.exit("[security-scan] a scan is already running (started earlier, maybe in another "
-                 "terminal). Wait for it to finish, then run again.")
+                 "terminal). Wait for it to finish, then run again. If you paused it with Ctrl+Z, "
+                 "type `fg` in that terminal, or stop it with: pkill -f security-scan/scan.py")
     day_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_json(STATE, {})
