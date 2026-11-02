@@ -43,6 +43,19 @@ def discover(roots, exclude):
     return sorted(set(found))
 
 
+def configured(cfg, rows):
+    """Repos found under `roots` plus the named `projects` (path, or folder name under a root)."""
+    repos = set(discover(cfg["roots"], cfg["exclude"]))
+    for name in cfg["projects"]:
+        cands = [Path(name).expanduser()] + [Path(r).expanduser() / name for r in cfg["roots"]]
+        hit = next((c.resolve() for c in cands if (c / ".git").exists()), None)
+        if hit:
+            repos.add(hit)
+        else:
+            rows.append((name, "project not found", "", "", ""))
+    return sorted(repos)
+
+
 def git(repo, *args):
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     return r.returncode, r.stdout.strip()
@@ -108,7 +121,7 @@ def scan_repo(repo, mode, base, day_dir, cfg):
 
 
 def main():
-    cfg = {"roots": ["~/Projects"], "exclude": [], "max_repos_per_run": 10,
+    cfg = {"roots": [], "projects": [], "exclude": [], "max_repos_per_run": 10,
            "review_timeout_sec": 1500, "ai_review": True, **load_json(os.environ.get("SECURITY_SCAN_CONFIG", HERE / "config.json"), {})}
     day_dir = HERE / "reports" / datetime.now().strftime("%Y-%m-%d_%H%M")
     day_dir.mkdir(parents=True, exist_ok=True)
@@ -128,7 +141,7 @@ def main():
                 rows.append((repo.name, "not a git repo with commits", "", "", ""))
             else:
                 todo.append((repo, ("full", None), head))
-    for repo in [] if explicit else discover(cfg["roots"], cfg["exclude"]):
+    for repo in [] if explicit else configured(cfg, rows):
         p, extra = plan(repo, state)
         if p is None:
             rows.append((repo.name, extra, "", "", ""))
@@ -166,6 +179,10 @@ def selftest():
             subprocess.run(["git", "init", "-q", str(t / n)], check=True)
         got = [p.relative_to(t).as_posix() for p in discover([t], ["skipme"])]
         assert got == ["a", "b/c"], got
+        rows = []
+        got = [p.name for p in configured({"roots": [], "projects": [str(t / "a"), "nope"],
+                                           "exclude": []}, rows)]
+        assert got == ["a"] and rows[0][:2] == ("nope", "project not found"), (got, rows)
         assert plan(t / "a", {}) == (None, "no commits")
         subprocess.run(["git", "-C", str(t / "a"), "-c", "user.name=t", "-c", "user.email=t@t",
                         "commit", "-q", "--allow-empty", "-m", "x"], check=True)

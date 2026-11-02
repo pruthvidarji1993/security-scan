@@ -1,4 +1,5 @@
 {
+  "projects": [],
   "roots": ["~/Projects/active"],
   "exclude": ["superpowers", "Claude-Code-Agent-Monitor", "security-scan"],
   "max_repos_per_run": 10,

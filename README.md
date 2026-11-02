@@ -16,6 +16,9 @@ cd security-scan
 python3 scan.py /path/to/your/project
 ```
 
+From inside any project, run it directly: `python3 /path/to/security-scan/scan.py .`
+(an explicit path ignores `config.json` and always does a full scan).
+
 Output: `reports/<date>/<project>/report.html` (client report), `findings.txt`
 (developer list) and `reports/<date>/SUMMARY.md`.
 
@@ -29,7 +32,8 @@ Edit `config.json`:
 
 | key | meaning |
 |---|---|
-| `roots` | folders searched for git repos (up to 3 levels deep) |
+| `projects` | repos to always scan: an absolute path, or a folder name under a root. Works with or without `roots` |
+| `roots` | folders searched for git repos (up to 3 levels deep). Use `[]` to scan only `projects` |
 | `exclude` | repo names or paths to skip (globs ok) |
 | `max_repos_per_run` | cap per run; the rest roll over to the next run |
 | `ai_review` | `false` = scanners only, no Claude usage |
