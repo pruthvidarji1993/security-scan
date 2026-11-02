@@ -17,6 +17,10 @@ SKIP_DIRS = {"node_modules", ".venv", "venv", "vendor", ".next", "dist", "build"
 MAX_DEPTH = 3
 
 
+def say(msg):
+    print(f"[security-scan] {msg}", file=sys.stderr, flush=True)
+
+
 def load_json(path, default):
     try:
         return json.loads(Path(path).read_text())
@@ -109,10 +113,16 @@ def counts(out):
 def scan_repo(repo, mode, base, day_dir, cfg):
     out = day_dir / repo.name
     out.mkdir(parents=True, exist_ok=True)
+    say(f"scanning {repo.name} ({mode}); the first run installs scanners and can take a few minutes")
     ok, log = run_scan(repo, mode, base, out)
     if not ok:
         (out / "error.log").write_text(log)
+        say(f"scan failed, details in {out / 'error.log'}")
         return {"status": "scan failed", "mode": mode}
+    stacks = load_json(out / "scan.json", {}).get("meta", {}).get("stacks") or ["none detected"]
+    say(f"stack: {', '.join(stacks)}; scanners done, {sum(counts(out).values())} raw findings")
+    if cfg["ai_review"]:
+        say("AI review running, this usually takes 2-10 minutes (use --no-ai to skip)")
     review = ai_review(repo, out, cfg["review_timeout_sec"]) if cfg["ai_review"] else "disabled"
     r = subprocess.run(["python3", str(RUNNER), "report", "--dir", str(out)], capture_output=True, text=True)
     (out / "findings.txt").write_text(r.stdout)
@@ -175,6 +185,9 @@ def main():
     (day_dir / "SUMMARY.md").write_text("\n".join(lines) + "\n")
     scanned = sum(1 for r in rows if r[1] == "scanned")
     print(f"done: {scanned} scanned, {len(rows)} repos seen -> {day_dir}/SUMMARY.md")
+    if explicit and not html_reports:
+        say("nothing was scanned: " + "; ".join(f"{r[0]}: {r[1]}" for r in rows)
+            + ". Run it inside a git repo that has at least one commit.")
     opener = {"darwin": "open", "linux": "xdg-open"}.get(sys.platform)
     for p, risk in html_reports:  # explicit runs only; scheduled runs just notify
         findings = p.parent / "findings.txt"

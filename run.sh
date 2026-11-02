@@ -8,6 +8,7 @@ REPO="https://github.com/pruthvidarji1993/security-scan.git"
 DIR="${SECURITY_SCAN_HOME:-$HOME/.cache/security-scan}"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
 
+echo "[security-scan] preparing (fetching the latest version)..." >&2
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$SELF/scan.py" ] && [ -d "$SELF/skill" ]; then
   DIR="$SELF"
 elif [ -d "$DIR/.git" ]; then
