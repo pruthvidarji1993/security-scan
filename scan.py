@@ -5,7 +5,7 @@ Per repo: deterministic scan (secure-review skill) -> best-effort AI review via
 headless `claude -p` -> HTML report. A repo is rescanned only when HEAD moved.
 Stdlib only. Usage: scan.py [--selftest]
 """
-import fcntl, fnmatch, json, os, subprocess, sys, tempfile, time
+import fcntl, fnmatch, json, os, subprocess, sys, tempfile, threading, time
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +19,38 @@ MAX_DEPTH = 3
 
 def say(msg):
     print(f"[security-scan] {msg}", file=sys.stderr, flush=True)
+
+
+class Heartbeat:
+    """Shows that a long step is alive: spinner + elapsed time on a terminal, a line every 20s otherwise."""
+    SPIN = "|/-\\"
+
+    def __init__(self, label, interval=None):
+        self.label, self.tty = label, sys.stderr.isatty()
+        self.interval = interval or (0.25 if self.tty else 20)
+
+    def _run(self):
+        i = 0
+        while not self.stop.wait(self.interval):
+            e = int(time.time() - self.t0)
+            if self.tty:
+                print(f"\r[security-scan] {self.label} {self.SPIN[i % 4]} {e // 60}m{e % 60:02d}s ",
+                      end="", file=sys.stderr, flush=True)
+                i += 1
+            else:
+                say(f"{self.label} still running ({e}s)")
+
+    def __enter__(self):
+        self.t0, self.stop = time.time(), threading.Event()
+        self.th = threading.Thread(target=self._run, daemon=True)
+        self.th.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.th.join()
+        if self.tty:
+            print("\r" + " " * 70 + "\r", end="", file=sys.stderr, flush=True)
 
 
 def load_json(path, default):
@@ -114,7 +146,8 @@ def scan_repo(repo, mode, base, day_dir, cfg):
     out = day_dir / repo.name
     out.mkdir(parents=True, exist_ok=True)
     say(f"scanning {repo.name} ({mode}); the first run installs scanners and can take a few minutes")
-    ok, log = run_scan(repo, mode, base, out)
+    with Heartbeat("scanning"):
+        ok, log = run_scan(repo, mode, base, out)
     if not ok:
         (out / "error.log").write_text(log)
         say(f"scan failed, details in {out / 'error.log'}")
@@ -123,7 +156,11 @@ def scan_repo(repo, mode, base, day_dir, cfg):
     say(f"stack: {', '.join(stacks)}; scanners done, {sum(counts(out).values())} raw findings")
     if cfg["ai_review"]:
         say("AI review running, this usually takes 2-10 minutes (use --no-ai to skip)")
-    review = ai_review(repo, out, cfg["review_timeout_sec"]) if cfg["ai_review"] else "disabled"
+    if cfg["ai_review"]:
+        with Heartbeat("AI review"):
+            review = ai_review(repo, out, cfg["review_timeout_sec"])
+    else:
+        review = "disabled"
     r = subprocess.run(["python3", str(RUNNER), "report", "--dir", str(out)], capture_output=True, text=True)
     (out / "findings.txt").write_text(r.stdout)
     risk = next((l for l in r.stdout.splitlines() if l.startswith("overall risk")), "overall risk: ?")
@@ -224,6 +261,11 @@ def selftest():
         assert (mode, base) == ("full", None)
         assert plan(t / "a", {str(t / "a"): {"sha": head}}) == (None, "unchanged")
         assert plan(t / "a", {str(t / "a"): {"sha": "0" * 40}})[0] == ("full", None)
+    import contextlib, io
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf), Heartbeat("x", interval=0.05):
+        time.sleep(0.3)
+    assert "x still running" in buf.getvalue(), buf.getvalue()
     print("selftest ok")
 
 
