@@ -28,8 +28,13 @@ git clone https://github.com/pruthvidarji1993/security-scan.git
 `~/.cache/secure-review`. The AI review needs the `claude` CLI, logged in; without it
 you still get the scanner results.
 
-**Output:** `reports/<date>/<project>/` containing `report.html` (client report),
-`findings.txt` (developer list) and `reports/<date>/SUMMARY.md`.
+**Output:** `reports/<date>/<project>/` inside the security-scan folder (for the
+one-liner: `~/.cache/security-scan/reports/...`), containing `report.html` (client
+report), `findings.txt` (developer list) and `reports/<date>/SUMMARY.md`.
+
+When you scan one project, `report.html` opens in your browser automatically and its
+path is printed. Add `--no-open` to skip that. Scheduled runs do not open anything;
+they show a notification, and you read `SUMMARY.md`.
 
 ## Scan many projects on a schedule
 

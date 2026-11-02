@@ -117,22 +117,26 @@ def scan_repo(repo, mode, base, day_dir, cfg):
     r = subprocess.run(["python3", str(RUNNER), "report", "--dir", str(out)], capture_output=True, text=True)
     (out / "findings.txt").write_text(r.stdout)
     risk = next((l for l in r.stdout.splitlines() if l.startswith("overall risk")), "overall risk: ?")
-    return {"status": "scanned", "mode": mode, "review": review, "risk": risk, "counts": counts(out)}
+    c = counts(out)
+    if review != "ok":  # nothing verified, so "No confirmed issues" would be misleading
+        risk = f"UNVERIFIED (scanner only): {sum(c.values())} raw findings"
+    return {"status": "scanned", "mode": mode, "review": review, "risk": risk, "counts": c}
 
 
 def main():
     cfg = {"roots": [], "projects": [], "exclude": [], "max_repos_per_run": 10,
            "review_timeout_sec": 1500, "ai_review": True, **load_json(os.environ.get("SECURITY_SCAN_CONFIG", HERE / "config.json"), {})}
     day_dir = HERE / "reports" / datetime.now().strftime("%Y-%m-%d_%H%M")
-    day_dir.mkdir(parents=True, exist_ok=True)
+    (HERE / "reports").mkdir(exist_ok=True)
     lock = open(HERE / "reports" / ".lock", "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         sys.exit("another scan is running")
+    day_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_json(STATE, {})
-    rows, todo = [], []
+    rows, todo, html_reports = [], [], []
     explicit = [Path(a).expanduser().resolve() for a in sys.argv[1:] if not a.startswith("--")]
     if explicit:  # `scan.py <path>`: scan exactly these, always a full scan
         for repo in explicit:
@@ -154,6 +158,8 @@ def main():
             res = scan_repo(repo, mode, base, day_dir, cfg)
         except Exception as e:  # one bad repo must not stop the run
             res = {"status": f"error: {type(e).__name__}", "mode": mode}
+        if explicit and res["status"] == "scanned":
+            html_reports.append(day_dir / repo.name / "report.html")
         if res["status"] == "scanned":
             state[str(repo)] = {"sha": head, "at": datetime.now().isoformat(timespec="seconds")}
             STATE.write_text(json.dumps(state, indent=1))
@@ -167,9 +173,15 @@ def main():
     (day_dir / "SUMMARY.md").write_text("\n".join(lines) + "\n")
     scanned = sum(1 for r in rows if r[1] == "scanned")
     print(f"done: {scanned} scanned, {len(rows)} repos seen -> {day_dir}/SUMMARY.md")
-    subprocess.run(["osascript", "-e",
-                    f'display notification "{scanned} repos scanned" with title "Security scan"'],
-                   capture_output=True)
+    opener = {"darwin": "open", "linux": "xdg-open"}.get(sys.platform)
+    for p in html_reports:  # explicit runs only; scheduled runs just notify
+        print(f"report: {p}")
+        if opener and "--no-open" not in sys.argv and p.exists():
+            subprocess.run([opener, str(p)], capture_output=True)
+    if sys.platform == "darwin":
+        subprocess.run(["osascript", "-e",
+                        f'display notification "{scanned} repos scanned" with title "Security scan"'],
+                       capture_output=True)
 
 
 def selftest():
