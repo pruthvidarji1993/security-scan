@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Security-scan one project. Usage: run.sh [project-path] [--no-open]   (default path: current directory)
+# Security-scan one project. Usage: run.sh [project-path] [--no-open] [--no-ai]   (default path: current directory)
 # Works from a clone of this repo, or copied/downloaded on its own: if scan.py is not
 # next to this script it clones the repo to $SECURITY_SCAN_HOME (default ~/.cache/security-scan)
 # and updates it on each run.

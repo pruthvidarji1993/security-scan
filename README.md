@@ -28,6 +28,9 @@ git clone https://github.com/pruthvidarji1993/security-scan.git
 `~/.cache/secure-review`. The AI review needs the `claude` CLI, logged in; without it
 you still get the scanner results.
 
+**Flags** (after the path): `--no-open` do not open the report in the browser;
+`--no-ai` scanners only, no Claude usage (findings are labelled `UNVERIFIED`).
+
 **Output:** `reports/<date>/<project>/` inside the security-scan folder (for the
 one-liner: `~/.cache/security-scan/reports/...`), containing `report.html` (client
 report), `findings.txt` (developer list) and `reports/<date>/SUMMARY.md`.
@@ -91,6 +94,10 @@ works in any project.
 - Secret values are never written to reports. `state.json`, `reports/` and `logs/` are
   gitignored.
 - `run.sh` runs whatever is on `main` of this repo. Pin a tag if you need stable behavior.
+
+## License
+
+[MIT](LICENSE)
 
 ## Tests
 

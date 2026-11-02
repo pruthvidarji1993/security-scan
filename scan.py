@@ -126,6 +126,8 @@ def scan_repo(repo, mode, base, day_dir, cfg):
 def main():
     cfg = {"roots": [], "projects": [], "exclude": [], "max_repos_per_run": 10,
            "review_timeout_sec": 1500, "ai_review": True, **load_json(os.environ.get("SECURITY_SCAN_CONFIG", HERE / "config.json"), {})}
+    if "--no-ai" in sys.argv:
+        cfg["ai_review"] = False
     day_dir = HERE / "reports" / datetime.now().strftime("%Y-%m-%d_%H%M")
     (HERE / "reports").mkdir(exist_ok=True)
     lock = open(HERE / "reports" / ".lock", "w")
@@ -159,7 +161,7 @@ def main():
         except Exception as e:  # one bad repo must not stop the run
             res = {"status": f"error: {type(e).__name__}", "mode": mode}
         if explicit and res["status"] == "scanned":
-            html_reports.append(day_dir / repo.name / "report.html")
+            html_reports.append((day_dir / repo.name / "report.html", res["risk"]))
         if res["status"] == "scanned":
             state[str(repo)] = {"sha": head, "at": datetime.now().isoformat(timespec="seconds")}
             STATE.write_text(json.dumps(state, indent=1))
@@ -174,10 +176,11 @@ def main():
     scanned = sum(1 for r in rows if r[1] == "scanned")
     print(f"done: {scanned} scanned, {len(rows)} repos seen -> {day_dir}/SUMMARY.md")
     opener = {"darwin": "open", "linux": "xdg-open"}.get(sys.platform)
-    for p in html_reports:  # explicit runs only; scheduled runs just notify
+    for p, risk in html_reports:  # explicit runs only; scheduled runs just notify
         findings = p.parent / "findings.txt"
         if findings.exists():
-            body = [l for l in findings.read_text().splitlines() if not l.startswith("report:")]
+            body = [risk if l.startswith("overall risk") else l
+                    for l in findings.read_text().splitlines() if not l.startswith("report:")]
             print(f"\n=== {p.parent.name} ===\n" + "\n".join(body).strip())
         print(f"\nreport: {p}")
         if opener and "--no-open" not in sys.argv and p.exists():
