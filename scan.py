@@ -177,7 +177,8 @@ def main():
     for p in html_reports:  # explicit runs only; scheduled runs just notify
         findings = p.parent / "findings.txt"
         if findings.exists():
-            print(f"\n=== {p.parent.name} ===\n{findings.read_text().strip()}")
+            body = [l for l in findings.read_text().splitlines() if not l.startswith("report:")]
+            print(f"\n=== {p.parent.name} ===\n" + "\n".join(body).strip())
         print(f"\nreport: {p}")
         if opener and "--no-open" not in sys.argv and p.exists():
             subprocess.run([opener, str(p)], capture_output=True)
