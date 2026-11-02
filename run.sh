@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Security-scan one project. Usage: run.sh [project-path]   (default: current directory)
+# Security-scan one project. Usage: run.sh [project-path] [--no-open]   (default path: current directory)
 # Works from a clone of this repo, or copied/downloaded on its own: if scan.py is not
 # next to this script it clones the repo to $SECURITY_SCAN_HOME (default ~/.cache/security-scan)
 # and updates it on each run.
@@ -16,4 +16,9 @@ else
   git clone -q --depth 1 "$REPO" "$DIR"
 fi
 
-exec python3 "$DIR/scan.py" "${1:-.}"
+# run.sh always scans one project: add "." when only flags (e.g. --no-open) are given,
+# so it can never fall through to the scheduled scan of every configured repo.
+args=("$@"); has_path=0
+for a in "$@"; do case "$a" in -*) ;; *) has_path=1 ;; esac; done
+[ "$has_path" = 1 ] || args+=(.)
+exec python3 "$DIR/scan.py" "${args[@]}"
