@@ -126,8 +126,7 @@ def run_scan(repo, mode, base, out):
     return r.returncode == 0 and (out / "scan.json").exists(), r.stdout[-2000:] + r.stderr[-2000:]
 
 
-SRC_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php", ".vue", ".svelte", ".java",
-           ".kt", ".swift", ".go", ".rb", ".cs", ".rs"}
+SRC_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php", ".vue", ".svelte", ".kt", ".swift"}
 
 
 def reviewable(repo, meta):
