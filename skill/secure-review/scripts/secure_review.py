@@ -42,6 +42,7 @@ SEVERITIES = ["critical", "high", "medium", "low", "info"]
 WSV_QUALITY = {"outdated", "hydration", "bundle", "rsc-boundary"}
 WSV_OWASP = {"npm-audit": "A06", "deprecated": "A06", "outdated": "A06", "secrets": "A07",
              "code-security": "A03", "nextjs": "A05", "source-maps": "A05", "supply-chain": "A08"}
+AI_ONLY = {"A01", "A04", "A07", "A08", "A10"}  # categories scanners barely cover; only the AI review reads the logic
 OWASP = {"A01": "Broken Access Control", "A02": "Cryptographic Failures", "A03": "Injection",
          "A04": "Insecure Design", "A05": "Security Misconfiguration",
          "A06": "Vulnerable and Outdated Components", "A07": "Identification and Authentication Failures",
@@ -637,9 +638,10 @@ def cmd_scan(a):
         found += guarded("gitleaks", ".", tools, scan_gitleaks, root, mode, changed, is_git, tools, raw, base)
     found = [f for f in found if not re.match(r"(.*/)?\.(claude|secure-review)/", f.get("file") or "")]
     if is_git:
-        ignored = git_ignored(root, {f["file"] for f in found if f.get("file")})
-        if ignored:
-            found = [f for f in found if f.get("file") not in ignored]
+        committed = lambda f: f.get("source") == "gitleaks" and "Committed in" in f.get("detail", "")
+        ignored = git_ignored(root, {f["file"] for f in found if f.get("file") and not committed(f)})
+        if ignored:  # a secret found in a commit stays: ignoring the file now does not remove it from history
+            found = [f for f in found if f.get("file") not in ignored or committed(f)]
             notes.append(f"dropped findings in {len(ignored)} git-ignored file(s) (build output, local files)")
     out_of_scope = 0
     if changed is not None:
@@ -701,7 +703,7 @@ def render(scan, review, findings):
     counts = "".join(f'<div class="tile sev-{s}"><b>{sum(f["severity"] == s for f in security)}</b>{s}</div>'
                      for s in SEVERITIES[:4])
     owasp_rows = "".join(
-        f"<tr><td>{k}</td><td>{v}</td><td>{n or '-'}</td></tr>"
+        f"<tr><td>{k}</td><td>{v}</td><td>{n or ('-' if review or k not in AI_ONLY else 'not checked (AI review did not run)')}</td></tr>"
         for k, v in OWASP.items() for n in [sum(f.get("owasp") == k for f in security)])
     unmapped = sum(not f.get("owasp") for f in security)
     tool_rows = "".join(f"<tr><td>{e(t['tool'])}</td><td>{e(t['project'])}</td>"
@@ -710,15 +712,28 @@ def render(scan, review, findings):
     loc = lambda f: f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else (f.get("file") or "dependency")
 
     def cards(items):
-        return "".join(
-            f"<article class='finding sev-{f['severity']}'><header><span class='sev'>{f['severity']}</span>"
-            f"<h4>{e(f['title'])}</h4><span class='status st-{e(f['status'])}'>{e(f['status'])}</span></header>"
-            f"<p class='loc'><code>{e(loc(f))}</code> · {e(f['source'])} · {e(f.get('owasp') or 'unmapped')}"
-            f"{' · ' + e(f['cwe']) if f.get('cwe') else ''} · {e(f.get('id', ''))}</p>"
-            f"{'<p>' + e(f['detail']) + '</p>' if f.get('detail') else ''}"
-            f"{'<p><b>Reviewer:</b> ' + e(f['note']) + '</p>' if f.get('note') else ''}"
-            f"{'<p><b>Fix:</b> ' + e(f['fix']) + '</p>' if f.get('fix') else ''}</article>" for f in items) \
-            or "<p class='muted'>None.</p>"
+        groups = {}  # same issue in several places -> one card with a list of locations
+        for f in items:
+            groups.setdefault((f["source"], f.get("rule") or f["title"], f["severity"], f["status"]), []).append(f)
+        out = []
+        for g in groups.values():
+            f = g[0]
+            where = (f"<p class='loc'><code>{e(loc(f))}</code> · " if len(g) == 1 else
+                     f"<p class='loc'><b>{len(g)} locations</b> · ")
+            where += (f"{e(f['source'])} · {e(f.get('owasp') or 'unmapped')}"
+                      f"{' · ' + e(f['cwe']) if f.get('cwe') else ''} · {e(f.get('id', ''))}</p>")
+            sub = "" if len(g) == 1 else "<ul>" + "".join(
+                f"<li><code>{e(loc(x))}</code> <span class='muted'>{e(x.get('id', ''))}</span>"
+                f"{' - ' + e(x['note']) if x.get('note') and x['note'] != f.get('note') else ''}</li>"
+                for x in g) + "</ul>"
+            out.append(
+                f"<article class='finding sev-{f['severity']}'><header><span class='sev'>{f['severity']}</span>"
+                f"<h4>{e(f['title'])}{f' ({len(g)})' if len(g) > 1 else ''}</h4>"
+                f"<span class='status st-{e(f['status'])}'>{e(f['status'])}</span></header>{where}{sub}"
+                f"{'<p>' + e(f['detail']) + '</p>' if f.get('detail') and len(g) == 1 else ''}"
+                f"{'<p><b>Reviewer:</b> ' + e(f['note']) + '</p>' if f.get('note') else ''}"
+                f"{'<p><b>Fix:</b> ' + e(f['fix']) + '</p>' if f.get('fix') else ''}</article>")
+        return "".join(out) or "<p class='muted'>None.</p>"
 
     roadmap = [("Fix before release", ["critical", "high"]), ("Next sprint", ["medium"]), ("Backlog", ["low", "info"])]
     road = "".join(f"<li><b>{label}</b> - {sum(f['severity'] in sevs for f in security)} finding(s)</li>"
@@ -755,7 +770,7 @@ main{{max-width:960px;margin:0 auto;padding:32px 16px 64px}}h1{{margin:0 0 4px;f
 <h2>Findings</h2>{cards(security)}
 <h2>Compliance and quality</h2>{cards(other)}
 <h2>Checks run</h2><div class="tablewrap"><table><tr><th>Tool</th><th>Project</th><th>Status</th><th>Raw</th><th>Notes</th></tr>{tool_rows}
-<tr><td>AI code review</td><td>.</td><td class="st-{'ran' if review else 'skipped'}">{'ran' if review else 'skipped'}</td><td>{len(review.get('added', []))}</td><td>Access control, session, injection, SSRF/CSRF, platform checks the scanners cannot see</td></tr></table></div>
+<tr><td>AI code review</td><td>.</td><td class="st-{'ran' if review else 'skipped'}">{'ran' if review else 'skipped'}</td><td>{len(review.get('added', []))}</td><td>{'Access control, session, injection, SSRF/CSRF, platform checks the scanners cannot see' if review else 'Did not run (disabled, no source code in scope, or it failed). Access control, CSRF, session and SSRF were NOT checked: scanners cannot see them.'}</td></tr></table></div>
 <h2>Scope and limitations</h2>{paras(summary.get('scope'))}{paras(summary.get('limitations'))}
 <p class="muted">{fp} scanner result(s) were reviewed and dismissed as false positives.{f" {meta['outOfScope']} pre-existing result(s) outside the changed files are excluded." if meta['outOfScope'] else ''}
 Unverified findings were not individually confirmed by a reviewer.</p>
@@ -903,6 +918,10 @@ def cmd_selftest(_):
     assert (merged[1]["title"], merged[1]["fix"]) == ("<script>alert(2)</script>", "Do X"), merged[1]
     page = render(scan, review, merged)
     assert "<script>alert" not in page and "&lt;script&gt;" in page and "Overall risk: Critical" in page
+    rep = [{**finding("semgrep", "xss", "high", "XSS"), "file": f"a{i}.js", "line": i, "id": f"F{i}", "status": "confirmed"} for i in (1, 2)]
+    grouped = render(scan, {}, rep)
+    assert grouped.count("<article") == 1 and "2 locations" in grouped and "a2.js:2" in grouped
+    assert "NOT checked" in grouped and "not checked (AI review did not run)" in grouped
 
     (f,) = norm_bandit({"results": [{"filename": "s.py", "line_number": 3, "test_id": "B105", "issue_severity": "LOW",
                                      "issue_text": "Possible hardcoded password: 'hunter22'", "code": "PW = 'hunter22'"}]}, ".")
