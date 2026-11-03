@@ -19,10 +19,16 @@
 ## Access control and auth (A01, A07)
 
 - Routes registered before the auth middleware, or a router mounted without it.
+- Auth middleware that fails open: calls `next()` when the token is missing or
+  when verification throws (`catch { next() }`).
 - NestJS controllers/handlers missing guards; `@Public()` on the wrong route.
+- NestJS `app.useGlobalGuards()` does not cover `@WebSocketGateway` or
+  `@MessagePattern` handlers in hybrid apps; they need their own guards.
 - Ownership not checked when loading by id; tenant id from the request instead
   of the session.
-- `jsonwebtoken.decode` used where `verify` is needed; `algorithms` not pinned.
+- `jsonwebtoken.decode` used where `verify` is needed; `verify` without
+  `audience`/`issuer`; `algorithms` not pinned (mainly a risk before v9 or when
+  the key comes from a callback/JWKS).
 - Session cookies without `httpOnly`, `secure`, `sameSite`; default session
   secrets.
 
@@ -31,9 +37,13 @@
 - No `helmet` (or equivalent headers); `x-powered-by` left on.
 - `cors({ origin: true, credentials: true })` or reflecting any origin.
 - No rate limiting on login, OTP, password reset, signup, expensive endpoints.
-- No body size limit (`express.json()` without `limit`, multer without
-  `limits`); uploads saved with client-supplied file names.
+- Body limit raised above the 100kb default (`express.json({ limit: '50mb' })`)
+  on public routes; multer without `limits`; uploads saved with
+  client-supplied file names.
 - Error handler returning `err.stack` or raw DB errors.
+- Express 4: an `async` handler that throws is not caught and crashes the
+  process (one request takes the service down) unless errors reach `next(err)`
+  or `express-async-errors` is loaded. Express 5 catches them.
 - `trust proxy` misconfigured so IP-based rate limits can be spoofed via
   `X-Forwarded-For`.
 
