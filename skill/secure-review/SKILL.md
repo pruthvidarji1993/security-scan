@@ -31,8 +31,9 @@ Arguments: `$ARGUMENTS`
   checksums), else `brew install gitleaks` when GitHub downloads are blocked;
   osv-scanner the same way, only when a PHP (`composer.lock`) or iOS
   CocoaPods project is detected. `web-secure-verification`
-  runs through `npx` at a pinned version. Nothing is added to the project's
-  `package.json`, requirements or lockfiles.
+  runs through `npx` at a pinned version. `supply-chain` is built in (no install): it flags
+  unpinned or URL dependencies, a missing lockfile, install-time scripts and pip
+  `--extra-index-url`. Nothing is added to the project's `package.json`, requirements or lockfiles.
 - Reports go to `<repo>/.secure-review/<timestamp>/`, kept out of git through
   `.git/info/exclude` (local only - the project's `.gitignore` is not touched).
 
