@@ -17,7 +17,7 @@ Run this from inside your project (a git repo with at least one commit):
 bash <(curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/pruthvidarji1993/security-scan/contents/run.sh)
 ```
 
-Or pass a path: append `/path/to/project`. Flags go after it: `--no-open`, `--no-ai`.
+Or pass a path: append `/path/to/project`.
 
 The script clones this repo to `~/.cache/security-scan`, updates it on every run, and scans
 the project. Nothing is added to, edited in, or committed to the scanned project. You do not
@@ -42,12 +42,31 @@ you still get the scanner results.
 `--no-ai` scanners only, no Claude usage (findings are labelled `UNVERIFIED`).
 
 **Output:** `reports/<date>/<project>/` inside the security-scan folder (for the
-one-liner: `~/.cache/security-scan/reports/...`), containing `report.html` (client
-report), `findings.txt` (developer list) and `reports/<date>/SUMMARY.md`.
+one-liner: `~/.cache/security-scan/reports/...`): `report.html` (client report),
+`findings.txt` (developer list) and `reports/<date>/SUMMARY.md`. A single-project scan
+opens `report.html` and prints its path; scheduled runs only show a notification.
 
-When you scan one project, `report.html` opens in your browser automatically and its
-path is printed. Add `--no-open` to skip that. Scheduled runs do not open anything;
-they show a notification, and you read `SUMMARY.md`.
+## Before you scan
+
+- **Install dependencies first** (`npm install`, `composer install`, `pod install`). Some
+  checks need them: JS needs `node_modules`; PHP and iOS need `composer.lock` / `Podfile.lock`.
+  The scanner never installs for you, because install scripts run arbitrary code. A missing
+  prerequisite shows as `skipped` in the report's Checks table, so check it for `skipped` rows.
+- **Log in to `claude`.** Without it the AI-only checks (access control, CSRF, injection and
+  so on) are marked not checked and findings are `UNVERIFIED`.
+- **Expect 2-10 minutes and about 100-220k tokens per repo** for the AI review.
+
+## What it checks
+
+| Layer | Covers |
+|---|---|
+| Scanners | semgrep (OWASP + per-stack rules), gitleaks (full git history), bandit, pip-audit, osv-scanner (Composer, CocoaPods), web-secure-verification (JS) |
+| Supply chain | unpinned or git/URL dependencies, missing lockfile, install-time scripts in `node_modules`, pip `--extra-index-url` (dependency confusion) |
+| AI review | per-stack checklists: access control, fail-open auth, rate limits, password hashing, CSRF, SSRF, uploads, deploy hygiene (exposed endpoints, source maps, default credentials, cookie flags) |
+
+**Limits:** static analysis only, no runtime or DAST testing, so a clean report is not proof
+of security. Vue and Angular are detected as generic Node and get a lighter AI review. Go and
+Java are not reviewed by AI (semgrep and gitleaks only). Kotlin and native iOS are untested.
 
 ## What you get
 
@@ -66,9 +85,7 @@ report: ~/.cache/security-scan/reports/2026-11-02_1311/nextjs/report.html
 
 The report is one self-contained HTML file (light and dark, prints to PDF, safe to email):
 executive summary, counts by severity, remediation roadmap, OWASP Top 10 coverage, and each
-finding with the exploit and the fix. [Download a sample](docs/sample-report.html) (generated
-from a small demo project with a seeded flaw). If you see `UNVERIFIED (scanner only)`, the AI
-review did not run, so findings are raw scanner output.
+finding with the exploit and the fix. [Download a sample](docs/sample-report.html).
 
 ## Scan many projects on a schedule
 
@@ -98,15 +115,13 @@ works in any project.
 
 ## Token use
 
-Scanners (semgrep, gitleaks, bandit and so on) run locally and cost no tokens. Only the AI
-review uses Claude, and it is kept lean:
+Scanners run locally and cost no tokens. Only the AI review uses Claude, and it is kept lean:
 
-- It runs only when there is source code to read. No source files, or a repeat scan where only
-  non-code files (README, lockfile) changed, skips it and says so.
-- Unchanged repos are not rescanned. Repeat scans of a repo review only what changed.
-- It starts with just the tools it needs (no skill list, no MCP servers), which cuts the fixed
-  overhead per run from about 36k to about 8k tokens (cost $0.28 to under $0.04, measured with a
-  trivial prompt). Each run prints the tokens and cost it used.
+- It runs only when there is source code to read; a repeat scan where only non-code files
+  (README, lockfile) changed skips it and says so.
+- Unchanged repos are not rescanned, and repeat scans review only what changed.
+- It starts with just the tools it needs (no skill list, no MCP servers), about 8k tokens of
+  fixed overhead instead of 36k. Each run prints the tokens and cost it used.
 - `--no-ai` skips it entirely.
 
 ## Safety
