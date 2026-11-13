@@ -23,6 +23,15 @@ Scanners here: semgrep `p/php` and osv-scanner for `composer.lock`. Apply
 - `{!! $var !!}` unescaped Blade output of user content.
 - CSRF middleware exceptions (`$except`) covering state-changing routes.
 
+- Auth middleware / `Gate::before` / policies returning `true` or calling
+  `$next($request)` when the user or token is missing or the check throws;
+  `Gate::before(fn () => true)` for "admin" without a real role check.
+- Login, password reset and OTP routes without `throttle` / `RateLimiter`;
+  `Hash::make` replaced by `md5`/`sha1`/`crypt`; `Hash::check` skipped by
+  comparing with `==`; token compare without `hash_equals`.
+- Security headers (CSP, HSTS, `X-Content-Type-Options`) not set by middleware;
+  `config/session.php` with `secure`/`http_only` false or `same_site` null;
+  `APP_ENV=local` / `APP_DEBUG=true` in committed `.env.production`, Docker or CI files.
 ## Mass assignment and wildcard queries
 
 - `Model::create($request->all())`, `->update($request->all())`,

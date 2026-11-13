@@ -501,6 +501,60 @@ def scan_pip_audit(root, proj, tools):
     return found
 
 
+def scan_supply_chain(root, proj, stacks, tools):
+    """Deterministic manifest checks the CVE scanners do not make: how dependencies are sourced, not what is known-bad."""
+    pdir, found = root / proj, []
+    rel = lambda n: (Path(proj) / n).as_posix() if proj != "." else n
+
+    def add(rule, sev, title, file, detail, fix):
+        found.append(finding("supply-chain", rule, sev, title, file, None, detail, fix, "A08", "CWE-829"))
+
+    if "node" in stacks and (pdir / "package.json").is_file():
+        try:
+            pkg = json.loads((pdir / "package.json").read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pkg = {}
+        bad = sorted(f"{n}@{v}" for n, v in {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}.items()
+                     if isinstance(v, str) and (v in ("*", "latest", "") or re.match(r"(git|https?:|github:|file:)", v)
+                                                or re.match(r"[\w.-]+/[\w.-]+(#|$)", v)))
+        if bad:
+            add("unpinned-or-url-dependency", "medium", "Dependencies from a URL, git repo or unpinned range",
+                rel("package.json"), "Resolved at install time to whatever the source serves then: " + ", ".join(bad[:10]),
+                "Use a registry version range and commit the lockfile.")
+        if not any((pdir / n).is_file() for n in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock")):
+            add("no-lockfile", "medium", "No lockfile: installs are not reproducible", rel("package.json"),
+                "Every install can pull different, unreviewed versions, and the dependency audit has nothing exact to check.",
+                "Commit package-lock.json / yarn.lock / pnpm-lock.yaml.")
+        nm = pdir / "node_modules"
+        if nm.is_dir():  # only packages that actually run code at install time; cheap, one level deep
+            hooks = []
+            for pj in [*nm.glob("*/package.json"), *nm.glob("@*/*/package.json")]:
+                try:
+                    sc = json.loads(pj.read_text(encoding="utf-8")).get("scripts", {})
+                except (ValueError, OSError):
+                    continue
+                if isinstance(sc, dict) and sc.keys() & {"preinstall", "install", "postinstall"}:
+                    hooks.append(pj.parent.relative_to(nm).as_posix())
+            if hooks:
+                add("install-scripts", "low", f"{len(hooks)} installed package(s) run code at install time",
+                    rel("package.json"), "Install hooks execute on every developer machine and CI run: " + ", ".join(sorted(hooks)[:15]),
+                    "Review them; use `npm ci --ignore-scripts` in CI and allow-list the ones that need a build step.")
+    for f in sorted(pdir.glob("requirements*.txt")) if "python" in stacks else []:
+        lines = [l.split("#")[0].strip() for l in f.read_text(encoding="utf-8", errors="ignore").splitlines()]
+        lines = [l for l in lines if l and not l.startswith(("-r", "-c", "--hash"))]
+        if any(re.match(r"--(extra-)?index-url", l) for l in lines):
+            add("extra-index-url", "high", "Extra package index: dependency-confusion risk", rel(f.name),
+                "With --extra-index-url pip takes the highest version from any index, so a public package with a private name wins.",
+                "Use a single trusted index, or --index-url only, with pinned hashes.")
+        loose = [l for l in lines if not l.startswith("-") and not re.search(r"==|@\s*\S+://", l)]
+        urls = [l for l in lines if re.match(r"(git\+|https?://)", l) or "@ git+" in l or "@ http" in l]
+        if loose or urls:
+            add("unpinned-or-url-dependency", "medium", "Python dependencies unpinned or from a URL", rel(f.name),
+                ", ".join((loose + urls)[:10]), "Pin exact versions (`==`) or use a lock file (pip-tools, uv, poetry.lock).")
+    tools.append(tool("supply-chain", proj, "ran", "manifest, lockfile and install-script checks", len(found)))
+    return found
+
+
 def scan_osv(root, tools):
     try:
         exe = ensure_osv()
@@ -623,6 +677,8 @@ def cmd_scan(a):
             return False
 
     for p in projects:
+        if {"node", "python"} & set(p["stacks"]):
+            found += guarded("supply-chain", p["path"], tools, scan_supply_chain, root, p["path"], set(p["stacks"]), tools)
         if "node" in p["stacks"]:
             found += guarded("web-secure-verification", p["path"], tools, scan_wsv, root, p["path"],
                              set(p["stacks"]), mode, tools, raw)
@@ -935,6 +991,18 @@ def cmd_selftest(_):
         assert secrets == {"secret123"}, secrets
         assert redact({"note": ["signed with 'secret123' via POST /login"]}, secrets) == \
             {"note": ["signed with '[redacted]' via POST /login"]}
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        (d / "package.json").write_text('{"dependencies":{"a":"latest","b":"github:x/y","c":"^1.0.0"}}')
+        (d / "node_modules/hooky").mkdir(parents=True)
+        (d / "node_modules/hooky/package.json").write_text('{"scripts":{"postinstall":"node x.js"}}')
+        (d / "requirements.txt").write_text("--extra-index-url https://x/simple\nflask==3.0\nrequests\n")
+        got = {(f["rule"], f["file"]): f for f in scan_supply_chain(d, ".", {"node", "python"}, [])}
+        assert set(got) == {("unpinned-or-url-dependency", "package.json"), ("no-lockfile", "package.json"),
+                            ("install-scripts", "package.json"), ("extra-index-url", "requirements.txt"),
+                            ("unpinned-or-url-dependency", "requirements.txt")}, set(got)
+        det = got[("unpinned-or-url-dependency", "package.json")]["detail"]
+        assert "a@latest" in det and "b@github:x/y" in det and "c@" not in det, det
     t = []
     assert guarded("x", ".", t, lambda: 1 / 0) == [] and t[0]["status"] == "failed" and "ZeroDivisionError" in t[0]["note"]
     (sg,) = norm_semgrep({"results": [{"check_id": "r", "path": "a.py", "start": {"line": 1},

@@ -14,3 +14,9 @@
 - Exception text or stack traces returned to the client; one shared error shape
   and shared status constants.
 - Per-row queries in a loop (SQLAlchemy without `joinedload` / `selectinload`).
+- No rate limit on login / reset / OTP routes (`flask-limiter`); session cookie
+  flags (`SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY`, `SAMESITE`) unset;
+  a `before_request` auth hook that returns `None` on error (fails open) or
+  skips by path prefix (`startswith("/api/public")` also matching `/api/public-admin`).
+- Passwords via `werkzeug.security.generate_password_hash` with `method="plain"`
+  or `md5`; `itsdangerous` tokens with no `max_age` on `loads`.

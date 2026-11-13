@@ -26,6 +26,13 @@
 - `Model.objects.filter(...).update(**request.POST)`; `.objects.all()` returned
   whole to the client (use `.only()` / `.values()`). See `database.md`.
 
+- Password hashers list still containing `MD5PasswordHasher` / `SHA1PasswordHasher`
+  / `UnsaltedMD5PasswordHasher`; no `AUTH_PASSWORD_VALIDATORS`; no throttling
+  (`DEFAULT_THROTTLE_CLASSES`) or `django-axes` on login and password reset.
+- `SECURE_CONTENT_TYPE_NOSNIFF`, `X_FRAME_OPTIONS`, `SESSION_COOKIE_HTTPONLY`,
+  `SECURE_REFERRER_POLICY` and a CSP (`django-csp`) unset for production;
+  `python manage.py check --deploy` warnings are findings.
+
 ## Injection and uploads
 
 - `.raw()`, `.extra()`, `RawSQL` with interpolated input; `mark_safe` / `|safe`

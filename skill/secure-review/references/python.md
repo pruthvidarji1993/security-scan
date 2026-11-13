@@ -40,3 +40,16 @@ Framework-specific checks live in `django.md`, `flask.md` and `fastapi.md`.
   exception text returned to the client.
 - N+1: related rows fetched inside a loop; use eager loading
   (`joinedload`/`selectinload`). See `database.md`.
+
+## Auth that fails open, brute force, secrets (any framework)
+
+- Auth decorator, dependency or middleware that returns/continues when the
+  token is missing, malformed or the verify call raises (`except: pass`,
+  `except Exception: return True`, `try: user = decode(t) except: user = None`
+  followed by a route that still runs). Auth must deny on every error path.
+- Login, password reset and OTP endpoints with no rate limit or lockout
+  (`slowapi`, `flask-limiter`, DRF throttling, `django-axes`).
+- Passwords compared with `==` or hashed with a fast hash; reset/OTP/session
+  tokens compared without `hmac.compare_digest`.
+- `SECRET_KEY` / JWT secret with a fallback default
+  (`os.environ.get("SECRET_KEY", "dev")`) that ships to production.

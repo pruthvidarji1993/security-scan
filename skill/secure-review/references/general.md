@@ -47,6 +47,18 @@ Red flags. Each needs a concrete exploit before it is a finding.
 - CORS `*` (or a reflected origin) together with credentials.
 - Missing security headers: CSP, HSTS, `X-Content-Type-Options`,
   `frame-ancestors`/`X-Frame-Options`, `Referrer-Policy`.
+- Exposed operational endpoints in production: `/actuator`, `/metrics`,
+  `/debug`, `/phpinfo`, `/server-status`, Swagger/OpenAPI, GraphQL playground,
+  `/.git`, `/.env`, `/admin` with default credentials, or admin/DB ports open to
+  the internet (also check `docker-compose` `ports:` bound to `0.0.0.0`).
+- Production source maps (`*.map`, `devtool: 'source-map'`, `productionBrowserSourceMaps`)
+  published, and `.env*`, backups (`*.sql`, `*.bak`, `*.zip`) or `.git` inside a
+  served `public/` / `static/` / web-root directory.
+- Default or sample credentials, seed users (`admin/admin`) and test accounts
+  that the production start-up path still creates; `NODE_ENV`/`APP_ENV`/`DEBUG`
+  defaulting to the permissive value when unset.
+- Cookies without `Secure`, `HttpOnly` and `SameSite`; session cookie name or
+  secret left at the framework default.
 - TLS verification disabled (`rejectUnauthorized: false`, `verify=False`).
 
 ## Injection and request forgery (A03, A10)

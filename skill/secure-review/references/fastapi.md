@@ -17,3 +17,9 @@
 - Status codes as `status.HTTP_*` and shared constants; exception text returned
   to the client; no `200` with an error body.
 - Per-row queries in a loop (SQLAlchemy without `joinedload` / `selectinload`).
+- No rate limit on login / reset / OTP routes (`slowapi`); a global
+  `Depends` auth that swallows `HTTPException`/`JWTError` and continues; token
+  expiry (`exp`) not enforced or never set; password hashing with plain
+  `hashlib` instead of `passlib`/`argon2`.
+- Auth enforced in `BaseHTTPMiddleware` by path prefix only: mounted sub-apps
+  (`app.mount`) and WebSocket routes bypass it.
