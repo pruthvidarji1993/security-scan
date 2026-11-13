@@ -65,7 +65,7 @@ opens `report.html` and prints its path; scheduled runs only show a notification
 | AI review | per-stack checklists: access control, fail-open auth, rate limits, password hashing, CSRF, SSRF, uploads, deploy hygiene (exposed endpoints, source maps, default credentials, cookie flags) |
 
 **Limits:** static analysis only, no runtime or DAST testing, so a clean report is not proof
-of security. Vue and Angular are detected as generic Node and get a lighter AI review. Go and
+of security. Vue is detected as generic Node and gets a lighter AI review. Go and
 Java are not reviewed by AI (semgrep and gitleaks only). Kotlin and native iOS are untested.
 
 ## What you get
