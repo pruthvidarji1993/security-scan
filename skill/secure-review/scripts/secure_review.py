@@ -146,6 +146,14 @@ def changed_files(root, base):
     return {f for f in files if (root / f).is_file()}
 
 
+TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec|e2e|__mocks__|mocks?|fixtures?|testdata|cypress)/|"
+                       r"(^|/)(test_[^/]*|conftest\.py|[^/]*(\.|_)(test|spec)\.[a-z]+)$", re.I)
+
+
+def is_secret_finding(f):
+    return f.get("source") == "gitleaks" or bool(SECRET_HINT.search(f.get("rule") or ""))
+
+
 def git_ignored(root, files):
     if not files:
         return set()
@@ -293,6 +301,22 @@ def ensure_osv():
     return ensure_binary("osv-scanner", ["--version"], (2, 0), fetch_osv)  # 2.x has `scan source`
 
 
+# Plain-English line per check, shown in the report's "Checks run" table. Add one for every new check.
+TOOL_DESC = {
+    "supply-chain": "Looks at how your libraries are sourced: unpinned versions, packages pulled from a URL, "
+                    "a missing lockfile, and libraries that run code when installed.",
+    "web-secure-verification": "Checks JavaScript code and settings for dangerous patterns, leaked keys, "
+                               "known-vulnerable or deprecated npm packages.",
+    "osv-scanner": "Matches the exact library versions in your lockfile against public vulnerability databases.",
+    "bandit": "Scans Python code for risky patterns such as shell commands, weak hashing and hardcoded passwords.",
+    "pip-audit": "Matches your Python libraries against known vulnerabilities and lists the fixed versions.",
+    "semgrep": "Scans code for known insecure patterns (injection, unsafe file access, weak crypto), "
+               "using security rules for your stack.",
+    "gitleaks": "Searches the code and its git history for passwords, API keys and tokens that were committed.",
+    "python-tools": "Installs the Python-based scanners the first time they are needed.",
+}
+
+
 def tool(name, project, status, note="", count=0):
     return {"tool": name, "project": project, "status": status, "note": note, "count": count}
 
@@ -311,8 +335,13 @@ def norm_wsv(data, prefix):
                 file = f"{prefix}/{file}"
             # The secrets scanner quotes the start of the value; the report may go to a client.
             detail = re.sub(r'Value starts with: "[^"]*"', "Value redacted.", i.get("description", ""))
+            sev = i.get("severity")
+            if scanner == "deprecated":  # the maintainer stopped fixing it: every future flaw stays open
+                sev = "high"
+            elif scanner == "outdated":  # a newer version exists; with no CVE that is housekeeping, never High
+                sev = "low"
             out.append(finding("web-secure-verification", f"{scanner}:{rule}",
-                               i.get("severity"), i.get("title", ""), file, i.get("line"),
+                               sev, i.get("title", ""), file, i.get("line"),
                                detail, i.get("fix", ""), WSV_OWASP.get(scanner),
                                category="quality" if scanner in WSV_QUALITY else
                                "compliance" if scanner == "license" else "security"))
@@ -550,11 +579,12 @@ def scan_supply_chain(root, proj, stacks, tools):
             add("extra-index-url", "high", "Extra package index: dependency-confusion risk", rel(f.name),
                 "With --extra-index-url pip takes the highest version from any index, so a public package with a private name wins.",
                 "Use a single trusted index, or --index-url only, with pinned hashes.")
-        loose = [l for l in lines if not l.startswith("-") and not re.search(r"==|@\s*\S+://", l)]
+        # A bound (>=, <=, ~=, <, >, !=) is a deliberate choice; only a bare name has no version at all.
+        loose = [l for l in lines if not l.startswith("-") and not re.search(r"[=<>~!]=?|@\s*\S+://", l)]
         urls = [l for l in lines if re.match(r"(git\+|https?://)", l) or "@ git+" in l or "@ http" in l]
         if loose or urls:
-            add("unpinned-or-url-dependency", "medium", "Python dependencies unpinned or from a URL", rel(f.name),
-                ", ".join((loose + urls)[:10]), "Pin exact versions (`==`) or use a lock file (pip-tools, uv, poetry.lock).")
+            add("unpinned-or-url-dependency", "medium", "Python dependencies with no version, or from a URL", rel(f.name),
+                ", ".join((loose + urls)[:10]), "Give each a version (ideally `==`) or use a lock file (pip-tools, uv, poetry.lock).")
     tools.append(tool("supply-chain", proj, "ran", "manifest, lockfile and install-script checks", len(found)))
     return found
 
@@ -725,6 +755,10 @@ def cmd_scan(a):
         if ignored:  # a secret found in a commit stays: ignoring the file now does not remove it from history
             found = [f for f in found if f.get("file") not in ignored or committed(f)]
             notes.append(f"dropped findings in {len(ignored)} git-ignored file(s) (build output, local files)")
+    in_tests = [f for f in found if f.get("file") and TEST_PATH.search(f["file"]) and is_secret_finding(f)]
+    if in_tests:  # test keys and fixtures are not live credentials; the real ones are never in a test folder
+        found = [f for f in found if f not in in_tests]
+        notes.append(f"dropped {len(in_tests)} secret finding(s) in test/fixture files")
     out_of_scope = 0
     if changed is not None:
         deps_changed = any(MANIFESTS.search(f) for f in changed)
@@ -788,7 +822,8 @@ def render(scan, review, findings):
         f"<tr><td>{k}</td><td>{v}</td><td>{n or ('-' if review or k not in AI_ONLY else 'not checked (AI review did not run)')}</td></tr>"
         for k, v in OWASP.items() for n in [sum(f.get("owasp") == k for f in security)])
     unmapped = sum(not f.get("owasp") for f in security)
-    tool_rows = "".join(f"<tr><td>{e(t['tool'])}</td><td>{e(t['project'])}</td>"
+    tool_rows = "".join(f"<tr><td>{e(t['tool'])}<br><small class='muted'>{e(TOOL_DESC.get(t['tool'], ''))}</small></td>"
+                        f"<td>{e(t['project'])}</td>"
                         f"<td class='st-{e(t['status'])}'>{e(t['status'])}</td><td>{t['count']}</td>"
                         f"<td>{e(t['note'])}</td></tr>" for t in scan["tools"])
     loc = lambda f: f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else (f.get("file") or "dependency")
@@ -860,6 +895,10 @@ Unverified findings were not individually confirmed by a reviewer.</p>
 
 
 # Matched against rule ids only: titles like "token stored in localStorage" are not about a literal secret.
+# Words that name a secret rather than being one. Redacting them blanks ordinary report text
+# ("Possible hardcoded [redacted]"), and a value that is just the word "password" gives nothing away.
+GENERIC_WORDS = {"password", "passwd", "pass", "secret", "token", "key", "apikey", "api_key", "username",
+                 "credential", "credentials", "changeme", "example", "placeholder"}
 SECRET_HINT = re.compile(r"secret|password|passwd|credential|api.?key|private.?key|hard.?code|B10[567]", re.I)
 
 
@@ -877,8 +916,16 @@ def secret_literals(root, findings):
         # Keys are names, not values: $_POST['password'], 'password' => ..., {"token": ...}. Skip them, and
         # routes, paths and prose, so the report stays readable.
         line = re.sub(r"""\[\s*["'][^"']*["']\s*\]|["'][^"']*["']\s*(?:=>|:(?!:))""", "", line)
-        values |= {v for v in re.findall(r"""["'`]([^"'`\s]{3,})["'`]""", line) if not v.startswith(("/", ".", "http"))}
+        values |= {v for v in re.findall(r"""["'`]([^"'`\s]{3,})["'`]""", line)
+                   if not v.startswith(("/", ".", "http")) and v.lower() not in GENERIC_WORDS}
     return values
+
+
+def secret_literals_for(line):
+    """secret_literals for one source line (used by the self-test)."""
+    with tempfile.TemporaryDirectory() as t:
+        Path(t, "a.py").write_text(line + "\n")
+        return secret_literals(t, [{**finding("bandit", "B105", "low", "x"), "file": "a.py", "line": 1}])
 
 
 def redact(value, secrets):
@@ -989,6 +1036,13 @@ def cmd_selftest(_):
                            "Secret": "REDACTED"}], "/tmp/x")
     assert (f["file"], f["severity"]) == ("src/k.py", "critical"), f
 
+    assert is_secret_finding({"source": "bandit", "rule": "B105"}) and not is_secret_finding({"source": "bandit", "rule": "B602"})
+    assert all(TEST_PATH.search(x) for x in ("tests/a.py", "src/__tests__/a.ts", "a/test_x.py", "x.spec.ts", "cypress/e2e/a.js"))
+    assert not any(TEST_PATH.search(x) for x in ("src/latest/a.py", "contest.py", "src/testing_utils.py", "app/main.py"))
+    wsv2 = {"results": [{"scanner": "outdated", "issues": [{"id": "o-x", "title": "Outdated", "severity": "high"}]},
+                        {"scanner": "deprecated", "issues": [{"id": "d-x", "title": "Deprecated", "severity": "low"}]}]}
+    assert [f["severity"] for f in norm_wsv(wsv2, ".")] == ["low", "high"]
+    assert "Possible hardcoded password" in redact("Possible hardcoded password", secret_literals_for('PW = "password"'))
     assert tail("Collecting x\nERROR: No matching distribution\nERROR:cli: ['/tmp/py', '-m']") == "ERROR: No matching distribution"
     assert tail("") == "no output" and tail("a\nb") == "b"
 
@@ -1041,13 +1095,15 @@ def cmd_selftest(_):
         (d / "package.json").write_text('{"dependencies":{"a":"latest","b":"github:x/y","c":"^1.0.0"}}')
         (d / "node_modules/hooky").mkdir(parents=True)
         (d / "node_modules/hooky/package.json").write_text('{"scripts":{"postinstall":"node x.js"}}')
-        (d / "requirements.txt").write_text("--extra-index-url https://x/simple\nflask==3.0\nrequests\n")
+        (d / "requirements.txt").write_text("--extra-index-url https://x/simple\nflask==3.0\nrequests\nrich>=13\ndjango<5\n")
         got = {(f["rule"], f["file"]): f for f in scan_supply_chain(d, ".", {"node", "python"}, [])}
         assert set(got) == {("unpinned-or-url-dependency", "package.json"), ("no-lockfile", "package.json"),
                             ("install-scripts", "package.json"), ("extra-index-url", "requirements.txt"),
                             ("unpinned-or-url-dependency", "requirements.txt")}, set(got)
         det = got[("unpinned-or-url-dependency", "package.json")]["detail"]
         assert "a@latest" in det and "b@github:x/y" in det and "c@" not in det, det
+        rdet = got[("unpinned-or-url-dependency", "requirements.txt")]["detail"]
+        assert rdet == "requests", rdet  # `flask==3.0`, `rich>=13`, `django<5` all state a version
     t = []
     assert guarded("x", ".", t, lambda: 1 / 0) == [] and t[0]["status"] == "failed" and "ZeroDivisionError" in t[0]["note"]
     (sg,) = norm_semgrep({"results": [{"check_id": "r", "path": "a.py", "start": {"line": 1},

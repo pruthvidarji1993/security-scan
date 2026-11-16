@@ -66,7 +66,7 @@ Add these after the command (or after the path):
 - Each finding says where it is (`file:line`), how someone could exploit it, and how to fix it.
 - **Confirmed**: Claude checked it and it is real. **Suspicion**: looks wrong but could not be
   proven. **Unverified**: found by a tool, not checked by Claude (for example with `--no-ai`).
-- **Checks table:** look for `skipped` rows. Each one says what was not checked and why
+- **Checks table:** each tool has a one-line description of what it does. Look for `skipped` rows. Each one says what was not checked and why
   (usually a missing dependency or lockfile).
 - **Scope** says how much code Claude read, e.g. "read 120 of 150 source files". Files it did
   not reach are listed and are read first on the next scan.
@@ -96,7 +96,7 @@ The automatic tools are free. Only the Claude review costs tokens.
 | Part | What it looks for |
 |---|---|
 | Automatic tools | Known dangerous code patterns, passwords and keys committed to git (including old commits), libraries with known vulnerabilities |
-| Dependencies | Versions that are not pinned, packages installed from a URL, a missing lockfile, packages that run scripts when installed |
+| Dependencies | Packages with no version, packages installed from a URL, a missing lockfile, packages that run scripts when installed. A version range such as `>=2.0` is fine. Deprecated packages are High; just being behind a newer version is Low |
 | Claude code review | Users reaching other users' data, admin pages without login checks, tokens that are not verified, injection (SQL, shell commands, file paths), weak password storage, missing rate limits, unsafe uploads, risky deploy settings |
 
 Even without `node_modules` (for example on a fresh clone), vulnerable npm libraries are still
@@ -155,7 +155,8 @@ Options: `diff` (only your changes, the default), `full` (whole project), `deps`
 - It only reads your project. It never edits, commits or pulls.
 - Claude can only write into its own report folder, and ignores any instructions found inside
   your code.
-- Passwords and keys it finds are never written into the report.
+- Passwords and keys it finds are never written into the report. Keys and passwords inside test
+  folders (`tests/`, `__tests__/`, `fixtures/`, `*.test.js` and similar) are ignored.
 - `run.sh` always uses the latest version on `main`. Pin a release tag if you need it to stay
   the same.
 

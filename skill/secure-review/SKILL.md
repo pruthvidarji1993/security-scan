@@ -114,7 +114,14 @@ with it.
   `false-positive` with the note `duplicate of Fxxx`.
 - **Recalibrate** scanner severity to real exposure: `eval` on a constant is
   not critical; an IDOR on invoices is. Test fixtures, mocks and example keys
-  are false positives.
+  are false positives (the scan already drops secret findings in test folders).
+- **Package versions**: a *deprecated* package (the maintainer stopped fixing it) is
+  `high`. A package that is merely behind a newer minor or patch version, with no
+  known CVE, is `low` at most - never `high`. A version range (`>=`, `<=`, `^`, `~`)
+  is a deliberate choice, not a finding; only a package with no version at all is.
+- **Say it plainly**: every finding and every new check gets a plain-English line a
+  non-security developer understands (what could happen, in one sentence). A new
+  scanner also gets a line in `TOOL_DESC` in the runner.
 - **Never write a secret value** - in chat, in `review.json` notes, titles or
   fixes, or in the summary - even weak or placeholder ones like `secret123` or
   `dev`. Write "the hardcoded JWT secret in server.js:7", never the value.
