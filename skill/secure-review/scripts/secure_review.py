@@ -35,8 +35,10 @@ SKIP_DIRS = {"node_modules", "venv", "dist", "build", "out", "coverage", "__pyca
 MANIFESTS = re.compile(r"(^|/)(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|requirements[^/]*\.txt|"
                        r"pyproject\.toml|poetry\.lock|Pipfile(\.lock)?|uv\.lock|composer\.(json|lock)|"
                        r"Podfile(\.lock)?|Package\.resolved)$")
-# Ecosystems osv-scanner audits; npm and PyPI are covered by web-secure-verification and pip-audit.
+# Ecosystems osv-scanner audits; npm and PyPI are covered by web-secure-verification and pip-audit,
+# except npm on a fresh clone (no node_modules), where osv-scanner reads the lockfile instead.
 OSV_STACKS = {"php", "ios"}
+NODE_LOCKS = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
 SEVERITIES = ["critical", "high", "medium", "low", "info"]
 # Scanners in web-secure-verification that report code quality, not security.
 WSV_QUALITY = {"outdated", "hydration", "bundle", "rsc-boundary"}
@@ -353,7 +355,8 @@ def norm_pip_audit(data, prefix, req):
     return out
 
 
-def norm_osv(data, root):
+def norm_osv(data, root, keep=()):
+    """keep: lockfiles (repo-relative) whose npm/PyPI results are kept because no other tool covers them."""
     out, seen = [], set()
     version = lambda s: tuple(int(n) for n in re.findall(r"\d+", s))
     for result in data.get("results", []):
@@ -361,7 +364,7 @@ def norm_osv(data, root):
         for p in result.get("packages", []):
             pkg, vulns = p["package"], p.get("vulnerabilities") or []
             key = (pkg["name"], pkg.get("version"))
-            if not vulns or pkg.get("ecosystem") in ("npm", "PyPI") or key in seen:
+            if not vulns or (pkg.get("ecosystem") in ("npm", "PyPI") and src not in keep) or key in seen:
                 continue
             seen.add(key)
             scores = [float(g["max_severity"]) for g in p.get("groups", []) if g.get("max_severity")]
@@ -436,7 +439,8 @@ def scan_wsv(root, proj, stacks, mode, tools, raw):
     if not (pdir / "node_modules").is_dir():
         # Installing would run the project's postinstall scripts - the reviewer decides, not this script.
         tools.append(tool("web-secure-verification", proj, "skipped",
-                          "node_modules missing - install dependencies first, then re-run"))
+                          "node_modules missing - JS code checks skipped (dependency CVEs come from the "
+                          "lockfile via osv-scanner); install dependencies and re-run for full coverage"))
         return []
     skip = {"hydration", "bundle", "rsc-boundary"}  # React quality checks, not security - 75% of results on a big app
     if "next" not in stacks:
@@ -555,21 +559,37 @@ def scan_supply_chain(root, proj, stacks, tools):
     return found
 
 
-def scan_osv(root, tools):
+def node_lockfile(root, proj):
+    """Nearest npm/yarn/pnpm lockfile at or above the project (workspaces keep one at the root), repo-relative."""
+    d = root / proj
+    while True:
+        for n in NODE_LOCKS:
+            if (d / n).is_file():
+                return rel_path(d / n, root)
+        if d.resolve() == root.resolve():
+            return None
+        d = d.parent
+
+
+def scan_osv(root, tools, recursive=True, lockfiles=()):
     try:
         exe = ensure_osv()
     except Exception as e:
         tools.append(tool("osv-scanner", ".", "failed", str(e)))
         return []
-    code, out, err = run([exe, "scan", "source", "-r", root, "--format", "json"], timeout=1800)
+    cmd = [exe, "scan", "source", "--format", "json"] + (["-r", root] if recursive else [])
+    for lf in lockfiles:
+        cmd += ["-L", root / lf]
+    code, out, err = run(cmd, timeout=1800)
     try:
-        found = norm_osv(json.loads(out), root)
+        found = norm_osv(json.loads(out), root, set(lockfiles))
     except ValueError:
         no_lock = "no package sources" in (err or "").lower()  # composer.json without composer.lock, etc.
         tools.append(tool("osv-scanner", ".", "skipped" if no_lock else "failed",
                           "no lockfile found (composer.lock / Podfile.lock) - generate one and re-run" if no_lock else tail(err)))
         return []
-    tools.append(tool("osv-scanner", ".", "ran", "Composer, CocoaPods", len(found)))
+    what = (["Composer, CocoaPods"] if recursive else []) + [f"{lf} (node_modules missing)" for lf in lockfiles]
+    tools.append(tool("osv-scanner", ".", "ran", "; ".join(what), len(found)))
     return found
 
 
@@ -686,8 +706,10 @@ def cmd_scan(a):
             if mode != "deps":
                 found += guarded("bandit", p["path"], tools, scan_bandit, root, p["path"], changed, tools)
             found += guarded("pip-audit", p["path"], tools, scan_pip_audit, root, p["path"], tools)
-    if stacks & OSV_STACKS:
-        found += guarded("osv-scanner", ".", tools, scan_osv, root, tools)
+    npm_locks = sorted({lf for p in projects if "node" in p["stacks"] and not (root / p["path"] / "node_modules").is_dir()
+                        for lf in [node_lockfile(root, p["path"])] if lf})
+    if stacks & OSV_STACKS or npm_locks:
+        found += guarded("osv-scanner", ".", tools, scan_osv, root, tools, bool(stacks & OSV_STACKS), npm_locks)
     if mode != "deps":
         if py_ready():
             found += guarded("semgrep", ".", tools, scan_semgrep, root, stacks, changed, tools)
@@ -920,6 +942,14 @@ def cmd_selftest(_):
     assert (f["severity"], f["file"]) == ("critical", None) and "to 7.4.5 or later" in f["fix"], f
     assert "php/composer.lock" in f["fix"] and "CVE-2022-1" in f["detail"] and "(2 advisories)" in f["title"], f
     assert MANIFESTS.search("cms/composer.lock") and MANIFESTS.search("ios/App/Podfile.lock")
+    npm = {"results": [{"source": {"path": "/r/web/package-lock.json"}, "packages": [osv["results"][0]["packages"][1]]}]}
+    assert norm_osv(npm, "/r") == [] and norm_osv(npm, "/r", {"web/package-lock.json"})[0]["rule"] == "left-pad"
+    with tempfile.TemporaryDirectory() as t:
+        (Path(t) / "apps/web").mkdir(parents=True)
+        (Path(t) / "yarn.lock").write_text("")
+        assert node_lockfile(Path(t), "apps/web") == "yarn.lock" and node_lockfile(Path(t), ".") == "yarn.lock"
+        (Path(t) / "yarn.lock").unlink()
+        assert node_lockfile(Path(t), "apps/web") is None
 
     wsv = {"results": [{"scanner": "code-security", "issues": [
         {"id": "code-security-eval-usage-src/a.ts-2", "title": "Use of eval()", "severity": "critical",

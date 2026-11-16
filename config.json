@@ -4,5 +4,7 @@
   "exclude": ["superpowers", "Claude-Code-Agent-Monitor", "security-scan"],
   "max_repos_per_run": 10,
   "review_timeout_sec": 1500,
+  "review_batch_files": 40,
+  "review_max_passes": 5,
   "ai_review": true
 }

@@ -30,7 +30,7 @@ Arguments: `$ARGUMENTS`
   is 8.19+, else the release binary (SHA-256 checked against the release
   checksums), else `brew install gitleaks` when GitHub downloads are blocked;
   osv-scanner the same way, only when a PHP (`composer.lock`) or iOS
-  CocoaPods project is detected. `web-secure-verification`
+  CocoaPods project is detected, or a JS project has a lockfile but no `node_modules`. `web-secure-verification`
   runs through `npx` at a pinned version. `supply-chain` is built in (no install): it flags
   unpinned or URL dependencies, a missing lockfile, install-time scripts and pip
   `--extra-index-url`. Nothing is added to the project's `package.json`, requirements or lockfiles.
@@ -56,8 +56,9 @@ The scan never aborts on one broken tool: a tool that cannot install or crashes 
 gitleaks. List every `failed`/`skipped` tool under `limitations`.
 
 If a JS project shows `node_modules missing`, **do not install dependencies
-yourself** - install scripts run arbitrary code. Tell the developer, continue
-with the other tools, and list it under limitations.
+yourself** - install scripts run arbitrary code. Its dependency CVEs are still
+read from the lockfile by osv-scanner; the JS code checks are not. Tell the
+developer, continue with the other tools, and list it under limitations.
 
 ## 2. AI review - what scanners miss
 
@@ -85,6 +86,9 @@ stack-specific checks were not available.
 - Also read the project's route files, migrations and test/fixture folders
   (secrets in tests, route inventory, migration quality, N+1) - scanners do not
   cover them, and they are not always in the diff for `full`.
+- **Given a file list** (the unattended runner passes one per pass): read every
+  file on it in full and apply the checklists to each - a file-by-file review,
+  not an overview. List the files you read in full in `reviewed`.
 - **`diff`**: read every changed file in full (not just hunks), and follow
   changed server code to its callers and the data it touches. Apply the
   loaded checklists.
@@ -128,6 +132,7 @@ with it.
   },
   "verdicts": { "F003": { "status": "confirmed", "severity": "high", "note": "Reachable from POST /api/upload without auth", "title": "optional: plain-English title", "fix": "optional: concrete fix" } },
   "rules": { "semgrep:<check_id>": { "status": "false-positive", "note": "Only used on constant strings" } },
+  "reviewed": ["src/app/api/orders/[id]/route.ts"],
   "added": [
     { "rule": "idor", "severity": "critical", "title": "Any user can read any order",
       "file": "src/app/api/orders/[id]/route.ts", "line": 12, "owasp": "A01", "cwe": "CWE-639",

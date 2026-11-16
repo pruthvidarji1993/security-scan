@@ -39,7 +39,13 @@ shared office network, prefer the git version.
 you still get the scanner results.
 
 **Flags** (after the path): `--no-open` do not open the report in the browser;
-`--no-ai` scanners only, no Claude usage (findings are labelled `UNVERIFIED`).
+`--no-ai` scanners only, no Claude usage (findings are labelled `UNVERIFIED`);
+`--full` rescan everything, ignoring the last scan.
+
+**Repeat scans are incremental.** The commit of the last completed scan of each project is stored in
+`state.json`. The next run scans only the commits since then (plus uncommitted files) and prints the
+last report's path when nothing changed. A scan whose AI review failed or was skipped does not count, so
+its commits are picked up again next time. A rewritten history (force-push) falls back to a full scan.
 
 **Output:** `reports/<date>/<project>/` inside the security-scan folder (for the
 one-liner: `~/.cache/security-scan/reports/...`): `report.html` (client report),
@@ -48,25 +54,29 @@ opens `report.html` and prints its path; scheduled runs only show a notification
 
 ## Before you scan
 
-- **Install dependencies first** (`npm install`, `composer install`, `pod install`). Some
-  checks need them: JS needs `node_modules`; PHP and iOS need `composer.lock` / `Podfile.lock`.
+- **Install dependencies first** (`npm install`, `composer install`, `pod install`) for full coverage.
+  On a fresh clone without `node_modules`, npm dependency CVEs still come from `package-lock.json`,
+  `yarn.lock` or `pnpm-lock.yaml` (osv-scanner), but the JS code checks of web-secure-verification
+  are skipped. PHP and iOS need `composer.lock` / `Podfile.lock`.
   The scanner never installs for you, because install scripts run arbitrary code. A missing
   prerequisite shows as `skipped` in the report's Checks table, so check it for `skipped` rows.
 - **Log in to `claude`.** Without it the AI-only checks (access control, CSRF, injection and
   so on) are marked not checked and findings are `UNVERIFIED`.
-- **Expect 2-10 minutes and about 100-220k tokens per repo** for the AI review.
+- **Expect 2-10 minutes and about 100-220k tokens per AI pass.** The AI reads every source file in
+  full, 40 files per pass, up to 5 passes (`review_batch_files`, `review_max_passes`). Files left
+  after the last pass are listed in the report and reviewed first on the next scan.
 
 ## What it checks
 
 | Layer | Covers |
 |---|---|
-| Scanners | semgrep (OWASP + per-stack rules), gitleaks (full git history), bandit, pip-audit, osv-scanner (Composer, CocoaPods), web-secure-verification (JS) |
+| Scanners | semgrep (OWASP + per-stack rules), gitleaks (full git history), bandit, pip-audit, osv-scanner (Composer, CocoaPods, and npm/yarn/pnpm lockfiles when `node_modules` is missing), web-secure-verification (JS) |
 | Supply chain | unpinned or git/URL dependencies, missing lockfile, install-time scripts in `node_modules`, pip `--extra-index-url` (dependency confusion) |
-| AI review | per-stack checklists: access control, fail-open auth, rate limits, password hashing, CSRF, SSRF, uploads, deploy hygiene (exposed endpoints, source maps, default credentials, cookie flags) |
+| AI review | every source file read in full (tests, generated and vendored code excluded), per-stack checklists: access control, fail-open auth, rate limits, password hashing, CSRF, SSRF, uploads, deploy hygiene (exposed endpoints, source maps, default credentials, cookie flags) |
 
 **Limits:** static analysis only, no runtime or DAST testing, so a clean report is not proof
 of security. Vue is detected as generic Node and gets a lighter AI review. Go and
-Java are not reviewed by AI (semgrep and gitleaks only). Kotlin and native iOS are untested.
+Java get only the general AI checklist (no stack-specific one) and no dependency audit. Kotlin and native iOS are untested.
 
 ## What you get
 
@@ -102,11 +112,13 @@ Edit [`config.json`](config.json):
 | `exclude` | repo names or paths to skip (globs ok) |
 | `max_repos_per_run` | cap per run; the rest roll over to the next run |
 | `ai_review` | `false` = scanners only, no Claude usage |
+| `review_batch_files` | source files the AI reads per pass (default 40) |
+| `review_max_passes` | cap on AI passes per repo per run (default 5); each pass costs tokens |
 
 New repos under `roots` are picked up automatically. Each run scans only repos whose
 HEAD changed: a `diff` against the last scan, or a `full` scan for a new repo.
 `python3 scan.py` with no argument does one run now. `python3 scan.py <path>` ignores
-the config and always does a full scan of that path.
+the config and scans that path, incrementally like above; add `--full` for a full scan.
 
 ## Use it inside Claude Code
 
