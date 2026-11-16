@@ -93,16 +93,6 @@ Even without `node_modules` (for example on a fresh clone), vulnerable npm libra
 found from `package-lock.json`, `yarn.lock` or `pnpm-lock.yaml`. Some JavaScript checks need
 `node_modules`, so install for the full picture.
 
-## What it cannot do
-
-- It reads code; it does not attack a running app. **A clean report does not prove the app is
-  secure.**
-- Claude reads files in groups, so a problem that spans two files in different groups (for
-  example a login check in one file and a page in another) can be missed.
-- "Read N of M files" is what Claude reports; it is not checked independently.
-- Vue gets a lighter review. Go and Java get only the general checks and no library check.
-  Kotlin and native iOS are untested.
-
 ## Troubleshooting
 
 | Problem | Fix |
