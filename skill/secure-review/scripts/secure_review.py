@@ -874,7 +874,9 @@ def secret_literals(root, findings):
             line = (Path(root) / f["file"]).read_text(encoding="utf-8", errors="ignore").splitlines()[f["line"] - 1]
         except (OSError, IndexError):
             continue
-        # Skip routes, paths and prose so the report stays readable.
+        # Keys are names, not values: $_POST['password'], 'password' => ..., {"token": ...}. Skip them, and
+        # routes, paths and prose, so the report stays readable.
+        line = re.sub(r"""\[\s*["'][^"']*["']\s*\]|["'][^"']*["']\s*(?:=>|:(?!:))""", "", line)
         values |= {v for v in re.findall(r"""["'`]([^"'`\s]{3,})["'`]""", line) if not v.startswith(("/", ".", "http"))}
     return values
 
@@ -1016,6 +1018,15 @@ def cmd_selftest(_):
     (f,) = norm_bandit({"results": [{"filename": "s.py", "line_number": 3, "test_id": "B105", "issue_severity": "LOW",
                                      "issue_text": "Possible hardcoded password: 'hunter22'", "code": "PW = 'hunter22'"}]}, ".")
     assert "hunter22" not in json.dumps(f), f
+    with tempfile.TemporaryDirectory() as t:
+        Path(t, "i.php").write_text('$db = new PDO("mysql:host=h", "root", "s3cr3tpw");\n$h = md5($_POST[\'password\']);\n'
+                                    "$c = ['password' => 'hunter22'];\n")
+        php = [{**finding("ai", "hardcoded-credentials", "high", "x"), "file": "i.php", "line": 1},
+               {**finding("ai", "weak-password-hash", "high", "x"), "file": "i.php", "line": 2},
+               {**finding("ai", "hardcoded-credentials", "high", "x"), "file": "i.php", "line": 3}]
+        got = secret_literals(t, php)
+        assert {"root", "s3cr3tpw", "hunter22"} <= got and "password" not in got, got
+        assert redact("md5($_POST['password']) in i.php", secret_literals(t, php)) == "md5($_POST['password']) in i.php"
     with tempfile.TemporaryDirectory() as t:
         Path(t, "server.js").write_text('app.post("/login", (q, r) => jwt.sign(u, "secret123"));\n'
                                         'localStorage.setItem("accessToken", token);\n')

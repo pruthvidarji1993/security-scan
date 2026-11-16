@@ -193,9 +193,12 @@ def run_scan(repo, mode, base, out):
 
 
 SRC_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php", ".vue", ".svelte", ".kt", ".swift",
-           ".go", ".java", ".rb", ".cs"}
+           ".go", ".java", ".rb", ".cs", ".phtml", ".inc"}
 NOT_REVIEWED = SKIP_DIRS | {"test", "tests", "__tests__", "spec", "e2e", "__mocks__", "fixtures", "migrations",
-                            "public", "static", "coverage", "out", "Pods"}
+                            "coverage", "out", "Pods"}
+# Served-file folders hold bundled JS/CSS, but PHP entry points live there (public/index.php) and Django
+# keeps handlers in static-adjacent apps, so only non-server-side code is skipped in them.
+ASSET_DIRS, SERVER_EXT = {"public", "static", "assets"}, {".php", ".phtml", ".inc", ".py"}
 ENTRY_HINTS = ("route", "api", "controller", "middleware", "auth", "server", "handler", "view", "app.", "main.",
                "index.", "urls", "upload", "admin", "user", "login", "session", "db", "model")
 
@@ -210,6 +213,7 @@ def review_files(repo, meta, pending=()):
     for f in dict.fromkeys([*files, *pending]):
         p = Path(f)
         if (p.suffix.lower() in SRC_EXT and not NOT_REVIEWED & set(p.parts[:-1])
+                and not (ASSET_DIRS & set(p.parts[:-1]) and p.suffix.lower() not in SERVER_EXT)
                 and not any(x in p.name for x in (".min.", ".test.", ".spec.", ".d.ts", "_test.", ".config."))
                 and (repo / f).is_file() and (repo / f).stat().st_size < 200_000):  # bigger is generated or bundled
             keep.append(f)
@@ -500,13 +504,18 @@ def selftest():
         for f in ("src/a.ts", "src/routes/orders.js", "src/a.test.ts", "tests/x.py", "dist/b.js", "README.md"):
             (a / f).parent.mkdir(parents=True, exist_ok=True)
             (a / f).write_text("x")
+        for f in ("public/index.php", "public/app.js", "static/x.py"):
+            (a / f).parent.mkdir(exist_ok=True)
+            (a / f).write_text("x")
+        got = review_files(a, {"changedFiles": ["public/index.php", "public/app.js", "static/x.py"]})
+        assert sorted(got) == ["public/index.php", "static/x.py"], got  # server code in served folders, not bundles
         assert review_files(a, {"changedFiles": ["README.md", "package-lock.json"]}) == []
         assert review_files(a, {"changedFiles": []}) == []
         assert review_files(a, {"changedFiles": ["src/a.ts", "gone.ts"]}, ["src/routes/orders.js"]) == \
             ["src/routes/orders.js", "src/a.ts"]  # pending carried over, entry point first, deleted file dropped
         assert review_files(a, {"changedFiles": None}) == []  # full mode, nothing tracked yet
         subprocess.run(["git", "-C", str(a), "add", "."], check=True)
-        assert review_files(a, {"changedFiles": None}) == ["src/routes/orders.js", "src/a.ts"]
+        assert review_files(a, {"changedFiles": None}) == ["public/index.php", "src/routes/orders.js", "src/a.ts", "static/x.py"]
         assert plan(t / "a", {str(t / "a"): {"sha": "0" * 40}})[0] == ("full", None)
         z = t / "a" / "zipped"  # a zip download unpacked inside a git repo: still treated as a plain folder
         (z / "node_modules/x").mkdir(parents=True)
