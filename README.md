@@ -36,10 +36,13 @@ When it finishes, the findings are printed in the terminal and the report opens 
 - **Next scans:** check only what changed since the last scan (new commits and uncommitted
   files). If nothing changed, it tells you so and prints where the last report is.
 - If the code review failed or was skipped last time, those commits are checked again next time.
+- **Once a month it does a full scan by itself** (if the code changed since the last full scan).
+  A repeat scan only reads changed files, so it can miss a change that breaks something in a file
+  you did not touch, for example a removed login check that an old page relied on. The monthly
+  full scan catches that.
 
-**Run a full scan with `--full` before a client delivery or a release, and about once a month.**
-A repeat scan only reads changed files, so it can miss a change that breaks something in a file
-you did not touch, for example a removed login check that an old page relied on.
+All of this happens automatically, whether you run the command yourself or on a schedule. You
+only need `--full` when you want a full check right now, for example before a client delivery.
 
 ## Options
 
@@ -128,6 +131,7 @@ Then edit [`config.json`](config.json):
 | `ai_review` | `false` = no Claude review, automatic tools only |
 | `review_batch_files` | Files Claude reads per round (default 40) |
 | `review_max_passes` | Most rounds per project per run (default 5). Lower it to cap cost |
+| `full_scan_every_days` | Do a full scan when the last one is this old (default 30). `0` = never |
 
 New projects under `roots` are found automatically, and only projects with new commits are
 scanned. `python3 scan.py` runs once now.

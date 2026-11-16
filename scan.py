@@ -105,7 +105,14 @@ def git(repo, *args):
     return r.returncode, r.stdout.strip()
 
 
-def plan(repo, state, ai=True):
+def days_since(iso):
+    try:
+        return (datetime.now() - datetime.fromisoformat(iso)).days
+    except (TypeError, ValueError):
+        return 10**6
+
+
+def plan(repo, state, ai=True, full_every_days=30):
     """Return ((mode, base), head) or (None, reason) when nothing to do."""
     rc, head = git(repo, "rev-parse", "HEAD")
     if rc:
@@ -113,6 +120,12 @@ def plan(repo, state, ai=True):
     entry = state.get(str(repo), {})
     last = entry.get("sha")
     if ai and not entry.get("ai", True):  # last scan was scanner-only: the AI has never read this code
+        last = None
+    # Incremental scans only read changed files, so a change that breaks an untouched file is missed;
+    # a periodic full scan catches it. Skipped when the code is exactly what the last full scan read.
+    full_age = days_since(entry.get("full_at", entry.get("at")))
+    if last and full_every_days and full_age >= full_every_days and head != entry.get("full_sha", last):
+        say(f"{repo.name}: last full scan was {full_age} days ago; doing a full scan this time")
         last = None
     if last == head:
         return None, f"unchanged since last scan ({head[:7]}, {entry.get('at', '?')}); --full rescans"
@@ -279,7 +292,8 @@ def scan_repo(repo, mode, base, day_dir, cfg, pending=()):
 
 def main():
     cfg = {"roots": [], "projects": [], "exclude": [], "max_repos_per_run": 10,
-           "review_timeout_sec": 1500, "ai_review": True, "review_batch_files": 40, "review_max_passes": 5, **load_json(os.environ.get("SECURITY_SCAN_CONFIG", HERE / "config.json"), {})}
+           "review_timeout_sec": 1500, "ai_review": True, "review_batch_files": 40, "review_max_passes": 5,
+           "full_scan_every_days": 30, **load_json(os.environ.get("SECURITY_SCAN_CONFIG", HERE / "config.json"), {})}
     if "--no-ai" in sys.argv:
         cfg["ai_review"] = False
     day_dir = HERE / "reports" / datetime.now().strftime("%Y-%m-%d_%H%M")
@@ -299,7 +313,7 @@ def main():
     # `scan.py <path>`: scan exactly these; like scheduled runs, only the commits since the last
     # completed scan of that path unless --full
     for repo in explicit or configured(cfg, rows):
-        p, extra = plan(repo, {} if "--full" in sys.argv else state, cfg["ai_review"])
+        p, extra = plan(repo, {} if "--full" in sys.argv else state, cfg["ai_review"], cfg["full_scan_every_days"])
         if p is None and extra == "no commits" and explicit:
             extra = "not a git repo with commits"
         if p is None:
@@ -320,9 +334,12 @@ def main():
         # Remember the commit only once the review finished, so a failed or timed-out review is
         # retried next run instead of its commits being skipped for good.
         if res["status"] == "scanned" and res.get("review") in ("ok", "not needed", "disabled"):
-            state[str(repo)] = {"sha": head, "at": datetime.now().isoformat(timespec="seconds"),
+            now, prev = datetime.now().isoformat(timespec="seconds"), state.get(str(repo), {})
+            state[str(repo)] = {"sha": head, "at": now,
                                 "ai": res["review"] != "disabled", "pending": res.get("left", []),
-                                "report": str(day_dir / repo.name / "report.html")}
+                                "report": str(day_dir / repo.name / "report.html"),
+                                "full_at": now if mode == "full" else prev.get("full_at", prev.get("at", now)),
+                                "full_sha": head if mode == "full" else prev.get("full_sha", prev.get("sha"))}
             STATE.write_text(json.dumps(state, indent=1))
         rows.append((repo.name, res["status"], res["mode"], res.get("risk", ""),
                      f"{res.get('counts', {})} review={res.get('review', '')}"))
@@ -374,6 +391,15 @@ def selftest():
         assert plan(t / "a", {str(t / "a"): {"sha": head}})[1].startswith("unchanged")
         assert plan(t / "a", {str(t / "a"): {"sha": head, "ai": False}}, ai=True)[0] == ("full", None)
         assert plan(t / "a", {str(t / "a"): {"sha": head, "ai": False}}, ai=False)[0] is None
+        old = "2020-01-01T00:00:00"
+        st = lambda **kw: {str(t / "a"): {"sha": "0" * 40, **kw}}
+        assert plan(t / "a", st(full_at=old, full_sha="1" * 40))[0] == ("full", None)  # monthly full due
+        st2 = {str(t / "a"): {"sha": head, "full_at": old, "full_sha": "1" * 40}}
+        assert plan(t / "a", st2)[0] == ("full", None)  # due even when HEAD is unchanged since an incremental
+        assert plan(t / "a", {str(t / "a"): {"sha": head, "full_at": old, "full_sha": head}})[0] is None
+        assert plan(t / "a", st2, full_every_days=0)[0] is None  # 0 turns it off
+        assert plan(t / "a", {str(t / "a"): {"sha": head, "full_at": datetime.now().isoformat(),
+                                             "full_sha": "1" * 40}})[0] is None
         a = t / "a"
         for f in ("src/a.ts", "src/routes/orders.js", "src/a.test.ts", "tests/x.py", "dist/b.js", "README.md"):
             (a / f).parent.mkdir(parents=True, exist_ok=True)
