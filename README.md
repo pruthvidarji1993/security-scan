@@ -83,8 +83,10 @@ Where reports are saved: `~/.cache/security-scan/reports/<date>/<project>/report
 
 The automatic tools are free. Only the Claude review costs tokens.
 
-- Claude reads your code in rounds of 40 files, up to 5 rounds per scan.
-- Each round takes 2-10 minutes and costs about $0.30-0.50.
+- Claude reads your code in rounds of 40 files, up to 5 rounds per scan, **3 rounds at the same
+  time**. In my test, the same project took 7 minutes instead of 16.
+- Each round takes 2-10 minutes and costs about $0.30-0.50. Running rounds at the same time
+  does not change the total cost.
 - A first scan of a large project can cost about $1.50-2.50. Repeat scans usually take one round.
 - If only non-code files changed (README, lockfile), Claude is not used at all.
 - The cost of each scan is printed at the end. Use `--no-ai` to spend nothing.
@@ -137,6 +139,7 @@ Then edit [`config.json`](config.json):
 | `ai_review` | `false` = no Claude review, automatic tools only |
 | `review_batch_files` | Files Claude reads per round (default 40) |
 | `review_max_passes` | Most rounds per project per run (default 5). Lower it to cap cost |
+| `review_parallel` | Rounds run at the same time (default 3). Set `1` if you hit Claude usage limits |
 | `full_scan_every_days` | Do a full scan when the last one is this old (default 30). `0` = never |
 
 New projects under `roots` are found automatically, and only projects with new commits are

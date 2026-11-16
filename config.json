@@ -6,6 +6,7 @@
   "review_timeout_sec": 1500,
   "review_batch_files": 40,
   "review_max_passes": 5,
+  "review_parallel": 3,
   "full_scan_every_days": 30,
   "ai_review": true
 }
