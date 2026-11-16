@@ -46,6 +46,9 @@ you still get the scanner results.
 `state.json`. The next run scans only the commits since then (plus uncommitted files) and prints the
 last report's path when nothing changed. A scan whose AI review failed or was skipped does not count, so
 its commits are picked up again next time. A rewritten history (force-push) falls back to a full scan.
+An incremental scan reads only the changed files, so it can miss a change that breaks an unchanged
+file (for example, a removed auth check that an old route relied on). **Run `--full` before a client
+delivery or a release, and about once a month.**
 
 **Output:** `reports/<date>/<project>/` inside the security-scan folder (for the
 one-liner: `~/.cache/security-scan/reports/...`): `report.html` (client report),
@@ -62,9 +65,12 @@ opens `report.html` and prints its path; scheduled runs only show a notification
   prerequisite shows as `skipped` in the report's Checks table, so check it for `skipped` rows.
 - **Log in to `claude`.** Without it the AI-only checks (access control, CSRF, injection and
   so on) are marked not checked and findings are `UNVERIFIED`.
-- **Expect 2-10 minutes and about 100-220k tokens per AI pass.** The AI reads every source file in
-  full, 40 files per pass, up to 5 passes (`review_batch_files`, `review_max_passes`). Files left
-  after the last pass are listed in the report and reviewed first on the next scan.
+- **Expect 2-10 minutes and about 85-220k tokens (about $0.30-0.50) per AI pass.** The AI reads
+  every source file in full, 40 files per pass, up to 5 passes (`review_batch_files`,
+  `review_max_passes`). A first full scan of a large repo can cost about $1.50-2.50; later
+  incremental scans usually take one pass. Files left after the last pass are listed in the
+  report and reviewed first on the next scan. The report's scope line says how many files
+  were read ("read N of M source files in full").
 
 ## What it checks
 
@@ -77,6 +83,9 @@ opens `report.html` and prints its path; scheduled runs only show a notification
 **Limits:** static analysis only, no runtime or DAST testing, so a clean report is not proof
 of security. Vue is detected as generic Node and gets a lighter AI review. Go and
 Java get only the general AI checklist (no stack-specific one) and no dependency audit. Kotlin and native iOS are untested.
+The AI reviews files in batches, so a flaw that spans files in different batches (a middleware
+in one, a route in another) can be missed. The "read N of M" count is what the AI reports; it is
+not checked independently.
 
 ## What you get
 
@@ -131,7 +140,9 @@ Scanners run locally and cost no tokens. Only the AI review uses Claude, and it 
 
 - It runs only when there is source code to read; a repeat scan where only non-code files
   (README, lockfile) changed skips it and says so.
-- Unchanged repos are not rescanned, and repeat scans review only what changed.
+- Unchanged repos are not rescanned, and repeat scans review only the commits since the last scan.
+- Each AI pass has a fixed cost (instructions, checklists, scan results), so raise
+  `review_batch_files` to use fewer, larger passes, or lower `review_max_passes` to cap cost.
 - It starts with just the tools it needs (no skill list, no MCP servers), about 8k tokens of
   fixed overhead instead of 36k. Each run prints the tokens and cost it used.
 - `--no-ai` skips it entirely.
