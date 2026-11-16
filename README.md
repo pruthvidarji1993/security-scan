@@ -2,28 +2,118 @@
 
 ![security-scan: one command security scan for any project](docs/social-preview.png)
 
-Stack-aware security review for any project, with zero per-project setup. Point it
-at a repo and it detects the stack (Next.js, React, Node API, Django, Flask,
-FastAPI, PHP/Laravel, React Native, Docker), runs the right scanners, adds an AI
-review of what scanners cannot see, and writes an HTML report mapped to OWASP Top 10.
+One command that checks your project for security problems and gives you a report you can read
+or send to a client.
 
-Built on the `secure-review` skill in [`skill/`](skill/secure-review/SKILL.md).
+It works out what your project is built with (Next.js, React, Node API, Django, Flask, FastAPI,
+PHP/Laravel, React Native, Docker), runs the right security tools, and then has Claude read your
+code for the problems tools usually miss: users seeing other users' data, missing login checks,
+forged tokens and similar flaws. You do not set anything up per project.
 
 ## Quick start
 
-Run this from inside your project (a git repo with at least one commit):
+**1. You need:** `python3` 3.10+, `git`, and the `claude` CLI logged in. Without `claude` it
+still runs, but only the automatic tools, not the code review.
+
+**2. Install your project's dependencies** (`npm install`, `composer install`, `pod install`).
+The scan never installs them for you, because install scripts can run any code.
+
+**3. Run this from inside your project:**
 
 ```bash
 bash <(curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/pruthvidarji1993/security-scan/contents/run.sh)
 ```
 
-Or pass a path: append `/path/to/project`.
+To scan another folder, add its path at the end. Your project is never changed: nothing is
+added, edited or committed.
 
-The script clones this repo to `~/.cache/security-scan`, updates it on every run, and scans
-the project. Nothing is added to, edited in, or committed to the scanned project. You do not
-need to edit any config or have write access to this repo.
+When it finishes, the findings are printed in the terminal and the report opens in your browser.
 
-If `curl` fails (it prints an error but the command still exits 0), use git instead:
+## First scan and repeat scans
+
+- **First scan:** checks the whole project. On a large project it can take a while (see
+  [Time and cost](#time-and-cost)).
+- **Next scans:** check only what changed since the last scan (new commits and uncommitted
+  files). If nothing changed, it tells you so and prints where the last report is.
+- If the code review failed or was skipped last time, those commits are checked again next time.
+
+**Run a full scan with `--full` before a client delivery or a release, and about once a month.**
+A repeat scan only reads changed files, so it can miss a change that breaks something in a file
+you did not touch, for example a removed login check that an old page relied on.
+
+## Options
+
+Add these after the command (or after the path):
+
+| Option | What it does |
+|---|---|
+| `--full` | Check the whole project again, not just what changed |
+| `--no-ai` | Only the automatic tools, no Claude review (free, but less thorough) |
+| `--no-open` | Do not open the report in the browser |
+
+## Reading the report
+
+- **Overall risk** is the worst confirmed problem: Critical, High, Moderate, Low, or
+  No confirmed issues.
+- Each finding says where it is (`file:line`), how someone could exploit it, and how to fix it.
+- **Confirmed**: Claude checked it and it is real. **Suspicion**: looks wrong but could not be
+  proven. **Unverified**: found by a tool, not checked by Claude (for example with `--no-ai`).
+- **Checks table:** look for `skipped` rows. Each one says what was not checked and why
+  (usually a missing dependency or lockfile).
+- **Scope** says how much code Claude read, e.g. "read 120 of 150 source files". Files it did
+  not reach are listed and are read first on the next scan.
+
+The report is a single HTML file (light and dark mode, prints to PDF, safe to email).
+[Download a sample](docs/sample-report.html).
+
+![Sample security report](docs/sample-report.png)
+
+Where reports are saved: `~/.cache/security-scan/reports/<date>/<project>/report.html`, next to
+`findings.txt` (a plain list for developers).
+
+## Time and cost
+
+The automatic tools are free. Only the Claude review costs tokens.
+
+- Claude reads your code in rounds of 40 files, up to 5 rounds per scan.
+- Each round takes 2-10 minutes and costs about $0.30-0.50.
+- A first scan of a large project can cost about $1.50-2.50. Repeat scans usually take one round.
+- If only non-code files changed (README, lockfile), Claude is not used at all.
+- The cost of each scan is printed at the end. Use `--no-ai` to spend nothing.
+
+## What it checks
+
+| Part | What it looks for |
+|---|---|
+| Automatic tools | Known dangerous code patterns, passwords and keys committed to git (including old commits), libraries with known vulnerabilities |
+| Dependencies | Versions that are not pinned, packages installed from a URL, a missing lockfile, packages that run scripts when installed |
+| Claude code review | Users reaching other users' data, admin pages without login checks, tokens that are not verified, injection (SQL, shell commands, file paths), weak password storage, missing rate limits, unsafe uploads, risky deploy settings |
+
+Even without `node_modules` (for example on a fresh clone), vulnerable npm libraries are still
+found from `package-lock.json`, `yarn.lock` or `pnpm-lock.yaml`. Some JavaScript checks need
+`node_modules`, so install for the full picture.
+
+## What it cannot do
+
+- It reads code; it does not attack a running app. **A clean report does not prove the app is
+  secure.**
+- Claude reads files in groups, so a problem that spans two files in different groups (for
+  example a login check in one file and a page in another) can be missed.
+- "Read N of M files" is what Claude reports; it is not checked independently.
+- Vue gets a lighter review. Go and Java get only the general checks and no library check.
+  Kotlin and native iOS are untested.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| The `curl` command prints an error | Use git instead (also better on a shared office network, where GitHub limits requests): see below |
+| "nothing was scanned: unchanged since last scan" | Nothing changed since the last scan. Add `--full` to scan again anyway |
+| "not a git repo with commits" | Run it inside a git project that has at least one commit |
+| "a scan is already running" | Wait for the other scan to finish, or stop it with `pkill -f security-scan/scan.py` |
+| `skipped` rows in the report | Install dependencies or commit the lockfile it names, then scan again |
+
+Git version of the quick start:
 
 ```bash
 git clone https://github.com/pruthvidarji1993/security-scan.git ~/.cache/security-scan 2>/dev/null \
@@ -31,138 +121,52 @@ git clone https://github.com/pruthvidarji1993/security-scan.git ~/.cache/securit
 ~/.cache/security-scan/run.sh /path/to/project
 ```
 
-The one-liner uses the GitHub API (60 requests per hour per IP without a token). Behind a
-shared office network, prefer the git version.
-
-**Needs:** `python3` 3.10+ and `git`. Scanners install themselves on first use into
-`~/.cache/secure-review`. The AI review needs the `claude` CLI, logged in; without it
-you still get the scanner results.
-
-**Flags** (after the path): `--no-open` do not open the report in the browser;
-`--no-ai` scanners only, no Claude usage (findings are labelled `UNVERIFIED`);
-`--full` rescan everything, ignoring the last scan.
-
-**Repeat scans are incremental.** The commit of the last completed scan of each project is stored in
-`state.json`. The next run scans only the commits since then (plus uncommitted files) and prints the
-last report's path when nothing changed. A scan whose AI review failed or was skipped does not count, so
-its commits are picked up again next time. A rewritten history (force-push) falls back to a full scan.
-An incremental scan reads only the changed files, so it can miss a change that breaks an unchanged
-file (for example, a removed auth check that an old route relied on). **Run `--full` before a client
-delivery or a release, and about once a month.**
-
-**Output:** `reports/<date>/<project>/` inside the security-scan folder (for the
-one-liner: `~/.cache/security-scan/reports/...`): `report.html` (client report),
-`findings.txt` (developer list) and `reports/<date>/SUMMARY.md`. A single-project scan
-opens `report.html` and prints its path; scheduled runs only show a notification.
-
-## Before you scan
-
-- **Install dependencies first** (`npm install`, `composer install`, `pod install`) for full coverage.
-  On a fresh clone without `node_modules`, npm dependency CVEs still come from `package-lock.json`,
-  `yarn.lock` or `pnpm-lock.yaml` (osv-scanner), but the JS code checks of web-secure-verification
-  are skipped. PHP and iOS need `composer.lock` / `Podfile.lock`.
-  The scanner never installs for you, because install scripts run arbitrary code. A missing
-  prerequisite shows as `skipped` in the report's Checks table, so check it for `skipped` rows.
-- **Log in to `claude`.** Without it the AI-only checks (access control, CSRF, injection and
-  so on) are marked not checked and findings are `UNVERIFIED`.
-- **Expect 2-10 minutes and about 85-220k tokens (about $0.30-0.50) per AI pass.** The AI reads
-  every source file in full, 40 files per pass, up to 5 passes (`review_batch_files`,
-  `review_max_passes`). A first full scan of a large repo can cost about $1.50-2.50; later
-  incremental scans usually take one pass. Files left after the last pass are listed in the
-  report and reviewed first on the next scan. The report's scope line says how many files
-  were read ("read N of M source files in full").
-
-## What it checks
-
-| Layer | Covers |
-|---|---|
-| Scanners | semgrep (OWASP + per-stack rules), gitleaks (full git history), bandit, pip-audit, osv-scanner (Composer, CocoaPods, and npm/yarn/pnpm lockfiles when `node_modules` is missing), web-secure-verification (JS) |
-| Supply chain | unpinned or git/URL dependencies, missing lockfile, install-time scripts in `node_modules`, pip `--extra-index-url` (dependency confusion) |
-| AI review | every source file read in full (tests, generated and vendored code excluded), per-stack checklists: access control, fail-open auth, rate limits, password hashing, CSRF, SSRF, uploads, deploy hygiene (exposed endpoints, source maps, default credentials, cookie flags) |
-
-**Limits:** static analysis only, no runtime or DAST testing, so a clean report is not proof
-of security. Vue is detected as generic Node and gets a lighter AI review. Go and
-Java get only the general AI checklist (no stack-specific one) and no dependency audit. Kotlin and native iOS are untested.
-The AI reviews files in batches, so a flaw that spans files in different batches (a middleware
-in one, a route in another) can be missed. The "read N of M" count is what the AI reports; it is
-not checked independently.
-
-## What you get
-
-The terminal shows the findings list, then the report opens in your browser:
-
-```
-=== nextjs ===
-overall risk: Critical
-[CRITICAL] app/api/orders/[id]/route.ts:2 - Unauthenticated IDOR: any order readable by id - ...
-[CRITICAL] app/api/orders/[id]/route.ts:3 - SQL injection via order id - Use a parameterised query ...
-
-report: ~/.cache/security-scan/reports/2026-11-02_1311/nextjs/report.html
-```
-
-![Sample security report](docs/sample-report.png)
-
-The report is one self-contained HTML file (light and dark, prints to PDF, safe to email):
-executive summary, counts by severity, remediation roadmap, OWASP Top 10 coverage, and each
-finding with the exploit and the fix. [Download a sample](docs/sample-report.html).
-
 ## Scan many projects on a schedule
 
 ```bash
-./setup.sh --schedule      # macOS: weekly, Mondays 09:00
+./setup.sh --schedule      # macOS: every Monday at 09:00
 ```
 
-Edit [`config.json`](config.json):
+Then edit [`config.json`](config.json):
 
-| key | meaning |
+| Setting | Meaning |
 |---|---|
-| `projects` | repos to always scan: an absolute path, or a folder name under a root |
-| `roots` | folders searched for git repos (up to 3 levels deep). `[]` scans only `projects` |
-| `exclude` | repo names or paths to skip (globs ok) |
-| `max_repos_per_run` | cap per run; the rest roll over to the next run |
-| `ai_review` | `false` = scanners only, no Claude usage |
-| `review_batch_files` | source files the AI reads per pass (default 40) |
-| `review_max_passes` | cap on AI passes per repo per run (default 5); each pass costs tokens |
+| `projects` | Projects to always scan: a full path, or a folder name inside a root |
+| `roots` | Folders to search for projects (up to 3 levels deep). `[]` = only `projects` |
+| `exclude` | Project names or paths to skip (wildcards allowed) |
+| `max_repos_per_run` | Most projects per run; the rest wait for the next run |
+| `ai_review` | `false` = no Claude review, automatic tools only |
+| `review_batch_files` | Files Claude reads per round (default 40) |
+| `review_max_passes` | Most rounds per project per run (default 5). Lower it to cap cost |
 
-New repos under `roots` are picked up automatically. Each run scans only repos whose
-HEAD changed: a `diff` against the last scan, or a `full` scan for a new repo.
-`python3 scan.py` with no argument does one run now. `python3 scan.py <path>` ignores
-the config and scans that path, incrementally like above; add `--full` for a full scan.
+New projects under `roots` are found automatically, and only projects with new commits are
+scanned. `python3 scan.py` runs once now.
 
 ## Use it inside Claude Code
 
-`./setup.sh` links the skill into `~/.claude/skills`, so `/secure-review [diff|full|deps]`
-works in any project.
-
-## Token use
-
-Scanners run locally and cost no tokens. Only the AI review uses Claude, and it is kept lean:
-
-- It runs only when there is source code to read; a repeat scan where only non-code files
-  (README, lockfile) changed skips it and says so.
-- Unchanged repos are not rescanned, and repeat scans review only the commits since the last scan.
-- Each AI pass has a fixed cost (instructions, checklists, scan results), so raise
-  `review_batch_files` to use fewer, larger passes, or lower `review_max_passes` to cap cost.
-- It starts with just the tools it needs (no skill list, no MCP servers), about 8k tokens of
-  fixed overhead instead of 36k. Each run prints the tokens and cost it used.
-- `--no-ai` skips it entirely.
+`./setup.sh` adds the skill to Claude Code, so you can type `/secure-review` in any project.
+Options: `diff` (only your changes, the default), `full` (whole project), `deps` (libraries only).
 
 ## Safety
 
-- Scans local checkouts only. It never pulls, edits or commits to them.
-- The AI review can read the repo and write only into its own report folder, and treats
-  repo content as untrusted. If it fails, you still get scanner results.
-- Secret values are never written to reports. `state.json`, `reports/` and `logs/` are
-  gitignored.
-- `run.sh` runs whatever is on `main` of this repo. Pin a tag if you need stable behavior.
+- It only reads your project. It never edits, commits or pulls.
+- Claude can only write into its own report folder, and ignores any instructions found inside
+  your code.
+- Passwords and keys it finds are never written into the report.
+- `run.sh` always uses the latest version on `main`. Pin a release tag if you need it to stay
+  the same.
 
-## License
-
-[MIT](LICENSE)
-
-## Tests
+## For maintainers
 
 ```bash
 python3 scan.py --selftest
 python3 skill/secure-review/scripts/secure_review.py selftest
 ```
+
+Built on the `secure-review` skill in [`skill/`](skill/secure-review/SKILL.md). Scan history is
+kept in `state.json` (one entry per project folder, so a fresh clone in another folder starts
+with a full scan).
+
+## License
+
+[MIT](LICENSE)
