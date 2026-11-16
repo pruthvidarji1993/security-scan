@@ -675,7 +675,11 @@ def cmd_scan(a):
     if is_git:
         exclude_output(root)
     mode, base, changed, notes = a.mode, a.base, None, []
-    if mode == "diff":
+    if a.changed_from:  # caller decided what changed (e.g. a folder without git history)
+        mode = "diff"
+        changed = {l.strip() for l in Path(a.changed_from).read_text().splitlines()
+                   if l.strip() and (root / l.strip()).is_file()}
+    elif mode == "diff":
         base = base or (default_base(root) if is_git else None)
         if base:
             changed = changed_files(root, base)
@@ -1049,6 +1053,7 @@ def main():
     s.add_argument("--mode", choices=["diff", "full", "deps"], default="diff")
     s.add_argument("--base")
     s.add_argument("--out")
+    s.add_argument("--changed-from", help="file listing the changed paths, one per line (instead of git diff)")
     r = sub.add_parser("report")
     r.add_argument("--dir", required=True)
     sub.add_parser("selftest")

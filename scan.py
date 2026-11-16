@@ -5,7 +5,7 @@ Per repo: deterministic scan (secure-review skill) -> best-effort AI review via
 headless `claude -p` -> HTML report. A repo is rescanned only when HEAD moved, and then only the
 commits since the last completed scan. Stdlib only. Usage: scan.py [path...] [--full] [--selftest]
 """
-import fcntl, fnmatch, json, os, subprocess, sys, tempfile, threading, time
+import fcntl, fnmatch, hashlib, json, os, subprocess, sys, tempfile, threading, time
 from datetime import datetime
 from pathlib import Path
 
@@ -92,7 +92,7 @@ def configured(cfg, rows):
     repos = set(discover(cfg["roots"], cfg["exclude"]))
     for name in cfg["projects"]:
         cands = [Path(name).expanduser()] + [Path(r).expanduser() / name for r in cfg["roots"]]
-        hit = next((c.resolve() for c in cands if (c / ".git").exists()), None)
+        hit = next((c.resolve() for c in cands if c.is_dir()), None)  # a git repo or a plain folder (zip)
         if hit:
             repos.add(hit)
         else:
@@ -112,20 +112,66 @@ def days_since(iso):
         return 10**6
 
 
+def is_git(repo):
+    return (repo / ".git").exists()  # not `git rev-parse`: a zip unpacked inside another repo would match it
+
+
+def list_files(repo):
+    """Tracked files of a git repo, or every file of a plain folder (a zip download has no .git)."""
+    if is_git(repo):
+        rc, out = git(repo, "ls-files")
+        return out.splitlines() if rc == 0 else []
+    found = []
+    for dirpath, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and d not in {".git", ".secure-review", "__pycache__"}]
+        found += [Path(dirpath, f).relative_to(repo).as_posix() for f in files]
+    return sorted(found)
+
+
+def fingerprint(repo):
+    """{path: content hash} for a folder without git, so the next scan can tell what changed."""
+    out = {}
+    for f in list_files(repo):
+        p = repo / f
+        if p.is_file() and p.stat().st_size < 20_000_000:  # bigger files are media/archives, not code
+            out[f] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    return out
+
+
+def full_due(repo, entry, current, every_days):
+    """Incremental scans only read changed files, so a change that breaks an untouched file is missed;
+    a periodic full scan catches it. Not when the code is exactly what the last full scan read."""
+    age = days_since(entry.get("full_at", entry.get("at")))
+    if every_days and age >= every_days and current != entry.get("full_sha", entry.get("sha")):
+        say(f"{repo.name}: last full scan was {age} days ago; doing a full scan this time")
+        return True
+    return False
+
+
 def plan(repo, state, ai=True, full_every_days=30):
-    """Return ((mode, base), head) or (None, reason) when nothing to do."""
+    """Return ((mode, base), head) or (None, reason) when nothing to do. Git repos: base is the last
+    scanned commit, head the current one. Plain folders: base is the list of changed files, head is
+    (digest, fingerprint)."""
+    entry = state.get(str(repo), {})
+    trusted = not ai or entry.get("ai", True)  # last scan was scanner-only: the AI has never read this code
+    if not is_git(repo):
+        files = fingerprint(repo)
+        if not files:
+            return None, "folder not found or empty"
+        digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+        old = entry.get("files") if trusted else None
+        if old is not None and full_due(repo, entry, digest, full_every_days):
+            old = None
+        if old == files:
+            return None, f"unchanged since last scan ({entry.get('at', '?')}); --full rescans"
+        if old is None:
+            return ("full", None), (digest, files)
+        return ("diff", sorted(f for f, h in files.items() if old.get(f) != h)), (digest, files)
     rc, head = git(repo, "rev-parse", "HEAD")
     if rc:
         return None, "no commits"
-    entry = state.get(str(repo), {})
-    last = entry.get("sha")
-    if ai and not entry.get("ai", True):  # last scan was scanner-only: the AI has never read this code
-        last = None
-    # Incremental scans only read changed files, so a change that breaks an untouched file is missed;
-    # a periodic full scan catches it. Skipped when the code is exactly what the last full scan read.
-    full_age = days_since(entry.get("full_at", entry.get("at")))
-    if last and full_every_days and full_age >= full_every_days and head != entry.get("full_sha", last):
-        say(f"{repo.name}: last full scan was {full_age} days ago; doing a full scan this time")
+    last = entry.get("sha") if trusted else None
+    if last and full_due(repo, entry, head, full_every_days):
         last = None
     if last == head:
         return None, f"unchanged since last scan ({head[:7]}, {entry.get('at', '?')}); --full rescans"
@@ -136,7 +182,10 @@ def plan(repo, state, ai=True, full_every_days=30):
 
 def run_scan(repo, mode, base, out):
     cmd = ["python3", str(RUNNER), "scan", "--root", str(repo), "--mode", mode, "--out", str(out)]
-    if base:
+    if isinstance(base, list):  # plain folder: the files whose content changed since the last scan
+        (out / "changed-files.txt").write_text("".join(f + "\n" for f in base))
+        cmd += ["--changed-from", str(out / "changed-files.txt")]
+    elif base:
         cmd += ["--base", base]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     return r.returncode == 0 and (out / "scan.json").exists(), r.stdout[-2000:] + r.stderr[-2000:]
@@ -155,8 +204,7 @@ def review_files(repo, meta, pending=()):
     plus files a previous run did not get to. Entry points (routes, auth, handlers) first."""
     files = meta.get("changedFiles")
     if files is None:
-        rc, out = git(repo, "ls-files")
-        files = out.splitlines() if rc == 0 else []
+        files = list_files(repo)
     keep = []
     for f in dict.fromkeys([*files, *pending]):
         p = Path(f)
@@ -315,7 +363,7 @@ def main():
     for repo in explicit or configured(cfg, rows):
         p, extra = plan(repo, {} if "--full" in sys.argv else state, cfg["ai_review"], cfg["full_scan_every_days"])
         if p is None and extra == "no commits" and explicit:
-            extra = "not a git repo with commits"
+            extra = "git repo has no commits yet"
         if p is None:
             rows.append((repo.name, extra, "", "", ""))
         else:
@@ -324,7 +372,8 @@ def main():
     todo.sort(key=lambda t: state.get(str(t[0]), {}).get("at", ""))
     for repo, (mode, base), head in todo[: cfg["max_repos_per_run"]]:
         if mode == "diff":
-            say(f"{repo.name}: incremental scan of commits since {base[:7]} (last scan); --full rescans everything")
+            since = f"{len(base)} changed files" if isinstance(base, list) else f"commits since {base[:7]}"
+            say(f"{repo.name}: incremental scan of {since} (last scan); --full rescans everything")
         try:
             res = scan_repo(repo, mode, base, day_dir, cfg, state.get(str(repo), {}).get("pending", []))
         except Exception as e:  # one bad repo must not stop the run
@@ -335,7 +384,8 @@ def main():
         # retried next run instead of its commits being skipped for good.
         if res["status"] == "scanned" and res.get("review") in ("ok", "not needed", "disabled"):
             now, prev = datetime.now().isoformat(timespec="seconds"), state.get(str(repo), {})
-            state[str(repo)] = {"sha": head, "at": now,
+            head, files = head if isinstance(head, tuple) else (head, None)
+            state[str(repo)] = {"sha": head, "at": now, **({"files": files} if files else {}),
                                 "ai": res["review"] != "disabled", "pending": res.get("left", []),
                                 "report": str(day_dir / repo.name / "report.html"),
                                 "full_at": now if mode == "full" else prev.get("full_at", prev.get("at", now)),
@@ -412,6 +462,21 @@ def selftest():
         subprocess.run(["git", "-C", str(a), "add", "."], check=True)
         assert review_files(a, {"changedFiles": None}) == ["src/routes/orders.js", "src/a.ts"]
         assert plan(t / "a", {str(t / "a"): {"sha": "0" * 40}})[0] == ("full", None)
+        z = t / "a" / "zipped"  # a zip download unpacked inside a git repo: still treated as a plain folder
+        (z / "node_modules/x").mkdir(parents=True)
+        (z / "node_modules/x/i.js").write_text("ignored")
+        (z / "app.js").write_text("a")
+        (z / "routes.js").write_text("r")
+        assert plan(z, {}) [1][1].keys() == {"app.js", "routes.js"}
+        (mode, base), (digest, files) = plan(z, {})
+        assert (mode, base) == ("full", None) and review_files(z, {"changedFiles": None}) == ["app.js", "routes.js"]
+        st = {str(z): {"sha": digest, "files": files, "at": datetime.now().isoformat()}}
+        assert plan(z, st)[1].startswith("unchanged")
+        (z / "app.js").write_text("changed")
+        (z / "new.js").write_text("n")
+        assert plan(z, st)[0] == ("diff", ["app.js", "new.js"])
+        assert plan(z, {str(z): {**st[str(z)], "full_at": "2020-01-01T00:00:00"}})[0] == ("full", None)
+        assert plan(t / "missing", {}) == (None, "folder not found or empty")
         m, left = merge_parts([{"summary": {"scope": "s"}, "verdicts": {"F1": 1}, "added": [{"r": 1}],
                                 "reviewed": ["x.js", "evil.js"]},
                                {"summary": {"scope": "s2"}, "verdicts": {"F1": 2}, "added": [{"r": 2}],

@@ -41,6 +41,11 @@ When it finishes, the findings are printed in the terminal and the report opens 
   you did not touch, for example a removed login check that an old page relied on. The monthly
   full scan catches that.
 
+**No git history (e.g. a zip download)?** It still works. Instead of commits, it remembers a
+fingerprint of every file, and the next scan checks only files that are new or changed. Unzip
+each new version into the **same folder** (delete the old contents first): scan history is kept
+per folder, so a different folder starts with a full scan.
+
 All of this happens automatically, whether you run the command yourself or on a schedule. You
 only need `--full` when you want a full check right now, for example before a client delivery.
 
@@ -102,7 +107,8 @@ found from `package-lock.json`, `yarn.lock` or `pnpm-lock.yaml`. Some JavaScript
 |---|---|
 | The `curl` command prints an error | Use git instead (also better on a shared office network, where GitHub limits requests): see below |
 | "nothing was scanned: unchanged since last scan" | Nothing changed since the last scan. Add `--full` to scan again anyway |
-| "not a git repo with commits" | Run it inside a git project that has at least one commit |
+| "git repo has no commits yet" | Make a first commit, or delete the empty `.git` folder to scan it as a plain folder |
+| "folder not found or empty" | Check the path you passed |
 | "a scan is already running" | Wait for the other scan to finish, or stop it with `pkill -f security-scan/scan.py` |
 | `skipped` rows in the report | Install dependencies or commit the lockfile it names, then scan again |
 
