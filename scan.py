@@ -194,9 +194,16 @@ def run_scan(repo, mode, base, out):
 
 
 SRC_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php", ".vue", ".svelte", ".kt", ".swift",
-           ".go", ".java", ".rb", ".cs", ".phtml", ".inc"}
+           ".go", ".java", ".rb", ".cs", ".phtml", ".inc",
+           # every stack is read, not only the ones with a checklist
+           ".rs", ".dart", ".scala", ".kts", ".groovy", ".c", ".cc", ".cpp", ".h", ".hpp", ".m", ".mm",
+           ".ex", ".exs", ".erl", ".lua", ".pl", ".pm", ".r", ".jl", ".clj", ".hs", ".sol", ".vb", ".fs",
+           ".sh", ".bash", ".ps1", ".sql", ".astro", ".cls", ".trigger", ".asp", ".aspx", ".cfm",
+           # templates: where XSS lives
+           ".html", ".htm", ".erb", ".ejs", ".hbs", ".twig", ".jinja", ".j2", ".jsp", ".cshtml", ".razor"}
 NOT_REVIEWED = SKIP_DIRS | {"test", "tests", "__tests__", "spec", "e2e", "__mocks__", "fixtures", "migrations", "alembic", "scripts",
-                            "coverage", "out", "Pods", "bower_components", "third_party", "third-party", "libs"}
+                            "coverage", "out", "Pods", "bower_components", "third_party", "third-party"}
+SERVED = {"public", "static", "assets", "wwwroot", "www", "web"}  # libs/ in here is downloaded JS; elsewhere it is app code (Nx)
 # Generated output is skipped by what the file looks like, not by folder: hand-written code lives in
 # public/, static/ and assets/ too (public/index.php, public/js/app.js).
 BUNDLED_NAME = re.compile(r"\.(min|chunk|bundle)\.|[.-][0-9a-f]{8,}\.(m?js|css)(\.map)?$", re.I)
@@ -224,7 +231,8 @@ def review_files(repo, meta, pending=()):
     keep = []
     for f in dict.fromkeys([*files, *pending]):
         p = Path(f)
-        if (p.suffix.lower() in SRC_EXT and not NOT_REVIEWED & set(p.parts[:-1])
+        dirs = set(p.parts[:-1])
+        if (p.suffix.lower() in SRC_EXT and not NOT_REVIEWED & dirs and not ("libs" in dirs and SERVED & dirs)
                 and not any(x in p.name for x in (".test.", ".spec.", ".d.ts", "_test."))
                 and (repo / f).is_file() and (repo / f).stat().st_size < 200_000  # bigger is generated or bundled
                 and not looks_bundled(repo / f)):
@@ -257,7 +265,7 @@ def merge_parts(parts, files, executive=None):
     s["scope"] = f"{s.get('scope', '')} AI review read {len(m['reviewed'])} of {len(files)} source files in full.".strip()
     if left:
         s["limitations"] = (f"{s.get('limitations', '')} {len(left)} source files were not read by the AI review "
-                            f"(pass limit reached; the next scan picks them up first): {', '.join(left[:15])}"
+                            f"(the review passes did not get to them; the next scan picks them up first): {', '.join(left[:15])}"
                             f"{' ...' if len(left) > 15 else ''}").strip()
     return m, left
 
@@ -315,7 +323,8 @@ def ai_review(repo, out, cfg, files):
     """Review in passes of `review_batch_files` files, `review_parallel` at a time, so every file is read
     in full, not skimmed. Returns (status, files left unread)."""
     parts, left, tokens, cost, n = [], list(files), 0, 0.0, 0
-    batches_left, retries = cfg["review_max_passes"], 1
+    # 0 = no limit: enough passes for every file, plus 2 for files a pass was given but did not read
+    batches_left, retries = cfg["review_max_passes"] or -(-len(files) // cfg["review_batch_files"]) + 2, 1
     while left and batches_left > 0:
         wave = []
         for _ in range(min(cfg["review_parallel"], batches_left)):
@@ -402,7 +411,7 @@ def scan_repo(repo, mode, base, day_dir, cfg, pending=()):
 
 def main():
     cfg = {"roots": [], "projects": [], "exclude": [], "max_repos_per_run": 10,
-           "review_timeout_sec": 1500, "ai_review": True, "review_batch_files": 40, "review_max_passes": 5, "review_parallel": 3,
+           "review_timeout_sec": 1500, "ai_review": True, "review_batch_files": 40, "review_max_passes": 0, "review_parallel": 3,
            "full_scan_every_days": 30, **load_json(os.environ.get("SECURITY_SCAN_CONFIG", HERE / "config.json"), {})}
     if "--no-ai" in sys.argv:
         cfg["ai_review"] = False
@@ -520,14 +529,17 @@ def selftest():
             (a / f).parent.mkdir(exist_ok=True)
             (a / f).write_text("x")
         for f in ("public/app.min.js", "public/4.chunk.js", "public/main.4f3a2b1c.js", "public/long.js",
-                  "third_party/lib.js"):
-            (a / f).parent.mkdir(exist_ok=True)
+                  "third_party/lib.js", "public/libs/jq.js", "libs/shared/auth.ts", "app/main.rs", "templates/x.html"):
+            (a / f).parent.mkdir(parents=True, exist_ok=True)
             (a / f).write_text("x" * 5000 if f.endswith("long.js") else "x")
         names = ["public/index.php", "public/app.js", "static/x.py", "next.config.js", "public/app.min.js",
-                 "public/4.chunk.js", "public/main.4f3a2b1c.js", "public/long.js", "third_party/lib.js"]
+                 "public/4.chunk.js", "public/main.4f3a2b1c.js", "public/long.js", "third_party/lib.js",
+                 "public/libs/jq.js", "libs/shared/auth.ts", "app/main.rs", "templates/x.html"]
         got = review_files(a, {"changedFiles": names})
         # hand-written code in served folders and config files are read; minified/chunk/hashed/long-line/vendor are not
-        assert sorted(got) == ["next.config.js", "public/app.js", "public/index.php", "static/x.py"], got
+        # ... and so are any language, templates, and a monorepo's libs/ (but not downloaded JS in public/libs)
+        assert sorted(got) == ["app/main.rs", "libs/shared/auth.ts", "next.config.js", "public/app.js",
+                               "public/index.php", "static/x.py", "templates/x.html"], got
         assert review_files(a, {"changedFiles": ["README.md", "package-lock.json"]}) == []
         assert review_files(a, {"changedFiles": []}) == []
         assert review_files(a, {"changedFiles": ["src/a.ts", "gone.ts"]}, ["src/routes/orders.js"]) == \
@@ -535,7 +547,8 @@ def selftest():
         assert review_files(a, {"changedFiles": None}) == []  # full mode, nothing tracked yet
         subprocess.run(["git", "-C", str(a), "add", "."], check=True)
         got = review_files(a, {"changedFiles": None})
-        assert got == ["public/app.js", "public/index.php", "src/routes/orders.js", "next.config.js", "src/a.ts", "static/x.py"], got
+        assert got == ["app/main.rs", "libs/shared/auth.ts", "public/app.js", "public/index.php", "src/routes/orders.js",
+                       "next.config.js", "src/a.ts", "static/x.py", "templates/x.html"], got
         assert plan(t / "a", {str(t / "a"): {"sha": "0" * 40}})[0] == ("full", None)
         z = t / "a" / "zipped"  # a zip download unpacked inside a git repo: still treated as a plain folder
         (z / "node_modules/x").mkdir(parents=True)
@@ -588,10 +601,13 @@ def selftest():
             r = json.loads((out / "review.json").read_text())
             assert (status, left) == ("ok", []) and len(r["reviewed"]) == 6, (status, left, r)
             assert r["summary"]["executive"] == "ALL" and len(calls) == 3 + 1 + 1, len(calls)  # 3 passes, 1 retry, summary
-            cfg["review_max_passes"] = 1  # the limit still applies: 4 files stay unread and are reported
+            cfg["review_max_passes"] = 1  # a limit still applies when set: 4 files stay unread and are reported
             (out / "x").mkdir()
             status, left = ai_review(Path(t), out / "x", cfg, names)
             assert len(left) == 4, left
+            cfg["review_max_passes"] = 0  # the default, no limit: every file is read
+            (out / "y").mkdir()
+            assert ai_review(Path(t), out / "y", cfg, [f"g{i}.js" for i in range(21)]) == ("ok", [])
     finally:
         claude_pass = real
     import contextlib, io

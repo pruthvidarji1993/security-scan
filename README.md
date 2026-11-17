@@ -138,7 +138,7 @@ Then edit [`config.json`](config.json):
 | `max_repos_per_run` | Most projects per run; the rest wait for the next run |
 | `ai_review` | `false` = no Claude review, automatic tools only |
 | `review_batch_files` | Files Claude reads per round (default 40) |
-| `review_max_passes` | Most rounds per project per run (default 5). Lower it to cap cost |
+| `review_max_passes` | Most rounds per project per run. Default `0` = no limit, every source file is read. Set a number to cap cost; files left over are read first on the next scan |
 | `review_parallel` | Rounds run at the same time (default 3). Set `1` if you hit Claude usage limits |
 | `full_scan_every_days` | Do a full scan when the last one is this old (default 30). `0` = never |
 
