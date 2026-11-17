@@ -31,7 +31,11 @@ HOME = Path(os.environ.get("SECURE_REVIEW_HOME") or Path.home() / ".cache" / "se
 WIN = os.name == "nt"
 
 SKIP_DIRS = {"node_modules", "venv", "dist", "build", "out", "coverage", "__pycache__", "site-packages",
-             "vendor", "Pods", "DerivedData", "target"}
+             "vendor", "Pods", "DerivedData", "target", ".next", ".nuxt", ".output", "_next", "chunks",
+             ".svelte-kit", ".turbo", ".angular", ".parcel-cache", "storybook-static"}
+# Build output by file name: app.min.js, 4.chunk.js, main.4f3a2b1c.js (also catches committed build folders).
+BUNDLED_NAME = re.compile(r"\.(min|chunk|bundle)\.|[.-][0-9a-f]{8,}\.(m?js|css)(\.map)?$|"
+                          r"\.(map|css|scss|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot)$", re.I)
 MANIFESTS = re.compile(r"(^|/)(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|requirements[^/]*\.txt|"
                        r"pyproject\.toml|poetry\.lock|Pipfile(\.lock)?|uv\.lock|composer\.(json|lock)|"
                        r"Podfile(\.lock)?|Package\.resolved)$")
@@ -637,6 +641,8 @@ def scan_semgrep(root, stacks, changed, tools):
             return []
     cmd = [venv_bin("semgrep"), "scan", "--json", "--quiet", "--metrics=off", "--timeout", "20",
            "--exclude", ".claude", "--exclude", ".secure-review"]
+    for d in sorted(SKIP_DIRS):
+        cmd += ["--exclude", d]
     for c in configs:
         cmd += ["--config", c]
     # shortcut: one semgrep call with every changed file as an argument; batch it if a diff ever hits ARG_MAX.
@@ -755,6 +761,11 @@ def cmd_scan(a):
         if ignored:  # a secret found in a commit stays: ignoring the file now does not remove it from history
             found = [f for f in found if f.get("file") not in ignored or committed(f)]
             notes.append(f"dropped findings in {len(ignored)} git-ignored file(s) (build output, local files)")
+    built = [f for f in found if f.get("file") and f.get("detail", "").find("Committed in") < 0
+             and (SKIP_DIRS & set(Path(f["file"]).parts[:-1]) or BUNDLED_NAME.search(f["file"]))]
+    if built:  # build/chunk output is generated; the source it came from is what gets scanned
+        found = [f for f in found if f not in built]
+        notes.append(f"dropped {len(built)} finding(s) in build/chunk output")
     in_tests = [f for f in found if f.get("file") and TEST_PATH.search(f["file"]) and is_secret_finding(f)]
     if in_tests:  # test keys and fixtures are not live credentials; the real ones are never in a test folder
         found = [f for f in found if f not in in_tests]

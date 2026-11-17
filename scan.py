@@ -14,7 +14,8 @@ HERE = Path(__file__).resolve().parent
 SKILL = HERE / "skill" / "secure-review"
 RUNNER = SKILL / "scripts" / "secure_review.py"
 STATE = HERE / "state.json"
-SKIP_DIRS = {"node_modules", ".venv", "venv", "vendor", ".next", "dist", "build"}
+SKIP_DIRS = {"node_modules", ".venv", "venv", "vendor", ".next", "dist", "build", "out", ".nuxt", ".output",
+             "_next", "chunks", ".svelte-kit", ".turbo", ".angular", "storybook-static"}
 MAX_DEPTH = 3
 
 
@@ -198,7 +199,7 @@ NOT_REVIEWED = SKIP_DIRS | {"test", "tests", "__tests__", "spec", "e2e", "__mock
                             "coverage", "out", "Pods", "bower_components", "third_party", "third-party", "libs"}
 # Generated output is skipped by what the file looks like, not by folder: hand-written code lives in
 # public/, static/ and assets/ too (public/index.php, public/js/app.js).
-BUNDLED_NAME = re.compile(r"\.(min|chunk|bundle)\.|[.-][0-9a-f]{8,}\.(m?js|css)$", re.I)
+BUNDLED_NAME = re.compile(r"\.(min|chunk|bundle)\.|[.-][0-9a-f]{8,}\.(m?js|css)(\.map)?$", re.I)
 ENTRY_HINTS = ("route", "api", "controller", "middleware", "auth", "server", "handler", "view", "app.", "main.",
                "index.", "urls", "upload", "admin", "user", "login", "session", "db", "model")
 
