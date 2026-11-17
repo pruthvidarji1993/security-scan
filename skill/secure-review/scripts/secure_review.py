@@ -335,6 +335,8 @@ def norm_wsv(data, prefix):
             file = i.get("file")
             # ids embed "-<file>-<line>"; strip it so one verdict can cover every instance of a rule
             rule = i.get("ruleId") or (i["id"].split(f"-{file}")[0] if file else i["id"])
+            if not file and scanner in ("npm-audit", "deprecated", "outdated", "license"):
+                file = "package.json"  # dependency findings have no file; point at the manifest that declares them
             if file and prefix != ".":
                 file = f"{prefix}/{file}"
             # The secrets scanner quotes the start of the value; the report may go to a client.
@@ -384,7 +386,8 @@ def norm_pip_audit(data, prefix, req):
                else f"No fixed version published for {dep['name']}; replace or mitigate")
         out.append(finding("pip-audit", dep["name"], "high",
                            f"Vulnerable dependency: {dep['name']} {dep['version']} ({len(vulns)} advisories)",
-                           None, None, ids[:600], f"{fix} ({prefix}/{req})", "A06"))
+                           req if prefix == "." else f"{prefix}/{req}", None, ids[:600],
+                           f"{fix} ({prefix}/{req})", "A06"))
     return out
 
 
@@ -415,7 +418,7 @@ def norm_osv(data, root, keep=()):
                    else f"No fixed version published for {pkg['name']}; replace or mitigate")
             out.append(finding("osv-scanner", pkg["name"], sev,
                                f"Vulnerable dependency: {pkg['name']} {pkg.get('version')} ({len(vulns)} advisories)",
-                               None, None, ", ".join(sorted(set(cves)) or [v["id"] for v in vulns])[:600],
+                               src, None, ", ".join(sorted(set(cves)) or [v["id"] for v in vulns])[:600],
                                f"{fix} ({src}, {pkg.get('ecosystem')})", "A06"))
     return out
 
@@ -837,7 +840,7 @@ def render(scan, review, findings):
                         f"<td>{e(t['project'])}</td>"
                         f"<td class='st-{e(t['status'])}'>{e(t['status'])}</td><td>{t['count']}</td>"
                         f"<td>{e(t['note'])}</td></tr>" for t in scan["tools"])
-    loc = lambda f: f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else (f.get("file") or "dependency")
+    loc = lambda f: f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else (f.get("file") or "whole project (no single file)")
 
     def cards(items):
         groups = {}  # same issue in several places -> one card with a list of locations
@@ -852,7 +855,8 @@ def render(scan, review, findings):
                       f"{' · ' + e(f['cwe']) if f.get('cwe') else ''} · {e(f.get('id', ''))}</p>")
             sub = "" if len(g) == 1 else "<ul>" + "".join(
                 f"<li><code>{e(loc(x))}</code> <span class='muted'>{e(x.get('id', ''))}</span>"
-                f"{' - ' + e(x['note']) if x.get('note') and x['note'] != f.get('note') else ''}</li>"
+                f"{' - ' + e(x['note']) if x.get('note') and x['note'] != f.get('note') else ''}"
+                f"{'<br><small class=muted>' + e(x['detail'][:160]) + '</small>' if x.get('detail') and not x.get('line') else ''}</li>"
                 for x in g) + "</ul>"
             out.append(
                 f"<article class='finding sev-{f['severity']}'><header><span class='sev'>{f['severity']}</span>"
@@ -963,7 +967,7 @@ def cmd_report(a):
              and f.get("category", "security") == "security"]
     print(f"report: {d / 'report.html'}\noverall risk: {rating(findings)}")
     for f in shown[:60]:
-        loc = f"{f['file']}:{f['line']}" if f.get("file") else "dependency"
+        loc = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else (f.get("file") or "whole project (no single file)")
         tag = "" if f["status"] == "confirmed" else f" ({f['status']})"
         print(f"[{f['severity'].upper()}]{tag} {loc} - {f['title']} - {f.get('fix') or ''}"[:300])
     if len(shown) > 60:
@@ -1003,7 +1007,7 @@ def cmd_selftest(_):
         {"package": {"name": "left-pad", "version": "1.0.0", "ecosystem": "npm"},
          "vulnerabilities": [{"id": "x"}]}]}]}
     (f,) = norm_osv(osv, "/r")
-    assert (f["severity"], f["file"]) == ("critical", None) and "to 7.4.5 or later" in f["fix"], f
+    assert (f["severity"], f["file"]) == ("critical", "php/composer.lock") and "to 7.4.5 or later" in f["fix"], f
     assert "php/composer.lock" in f["fix"] and "CVE-2022-1" in f["detail"] and "(2 advisories)" in f["title"], f
     assert MANIFESTS.search("cms/composer.lock") and MANIFESTS.search("ios/App/Podfile.lock")
     npm = {"results": [{"source": {"path": "/r/web/package-lock.json"}, "packages": [osv["results"][0]["packages"][1]]}]}
@@ -1022,7 +1026,7 @@ def cmd_selftest(_):
     a, b = norm_wsv(wsv, "web")
     assert (a["file"], a["rule"], a["owasp"], a["category"]) == ("web/src/a.ts", "code-security:code-security-eval-usage", "A03", "security"), a
     assert "ghp_" not in a["detail"] and "redacted" in a["detail"], a
-    assert (b["file"], b["category"]) == (None, "quality"), b
+    assert (b["file"], b["category"]) == ("web/package.json", "quality"), b
     assert version_at_least("8.30.1", (8, 19)) and not version_at_least("v8.18.4", (8, 19))
 
     bandit = {"results": [{"filename": "./app.py", "line_number": 4, "test_id": "B602", "issue_severity": "HIGH",
