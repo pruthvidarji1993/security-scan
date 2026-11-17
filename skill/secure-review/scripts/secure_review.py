@@ -33,6 +33,7 @@ WIN = os.name == "nt"
 SKIP_DIRS = {"node_modules", "venv", "dist", "build", "out", "coverage", "__pycache__", "site-packages",
              "vendor", "Pods", "DerivedData", "target", ".next", ".nuxt", ".output", "_next", "chunks",
              ".svelte-kit", ".turbo", ".angular", ".parcel-cache", "storybook-static"}
+SKIP_SCAN_DIRS = {"alembic", "tests", "test", "__tests__", "scripts"}
 # Build output by file name: app.min.js, 4.chunk.js, main.4f3a2b1c.js (also catches committed build folders).
 BUNDLED_NAME = re.compile(r"\.(min|chunk|bundle)\.|[.-][0-9a-f]{8,}\.(m?js|css)(\.map)?$|"
                           r"\.(map|css|scss|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot)$", re.I)
@@ -644,7 +645,7 @@ def scan_semgrep(root, stacks, changed, tools):
             return []
     cmd = [venv_bin("semgrep"), "scan", "--json", "--quiet", "--metrics=off", "--timeout", "20",
            "--exclude", ".claude", "--exclude", ".secure-review"]
-    for d in sorted(SKIP_DIRS):
+    for d in sorted(SKIP_DIRS | SKIP_SCAN_DIRS) + ["*.md"]:
         cmd += ["--exclude", d]
     for c in configs:
         cmd += ["--config", c]
@@ -769,6 +770,20 @@ def cmd_scan(a):
     if built:  # build/chunk output is generated; the source it came from is what gets scanned
         found = [f for f in found if f not in built]
         notes.append(f"dropped {len(built)} finding(s) in build/chunk output")
+    skipped = [f for f in found if f.get("file") and "Committed in" not in f.get("detail", "") and (
+        f["file"].lower().endswith(".md") or SKIP_SCAN_DIRS & set(Path(f["file"]).parts[:-1]))]
+    if skipped:  # migrations, tests, helper scripts and docs are not the deployed application
+        found = [f for f in found if f not in skipped]
+        notes.append(f"dropped {len(skipped)} finding(s) in alembic/tests/scripts/.md files")
+    seen, unique = set(), []
+    for f in sorted(found, key=lambda f: SEVERITIES.index(f["severity"])):  # same issue twice: keep the worst
+        k = (f.get("file"), f.get("line"), f["title"], f.get("detail"))
+        if k not in seen:
+            seen.add(k)
+            unique.append(f)
+    if len(unique) < len(found):
+        notes.append(f"removed {len(found) - len(unique)} duplicate finding(s)")
+    found = unique
     in_tests = [f for f in found if f.get("file") and TEST_PATH.search(f["file"]) and is_secret_finding(f)]
     if in_tests:  # test keys and fixtures are not live credentials; the real ones are never in a test folder
         found = [f for f in found if f not in in_tests]

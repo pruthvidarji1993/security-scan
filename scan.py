@@ -195,7 +195,7 @@ def run_scan(repo, mode, base, out):
 
 SRC_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php", ".vue", ".svelte", ".kt", ".swift",
            ".go", ".java", ".rb", ".cs", ".phtml", ".inc"}
-NOT_REVIEWED = SKIP_DIRS | {"test", "tests", "__tests__", "spec", "e2e", "__mocks__", "fixtures", "migrations",
+NOT_REVIEWED = SKIP_DIRS | {"test", "tests", "__tests__", "spec", "e2e", "__mocks__", "fixtures", "migrations", "alembic", "scripts",
                             "coverage", "out", "Pods", "bower_components", "third_party", "third-party", "libs"}
 # Generated output is skipped by what the file looks like, not by folder: hand-written code lives in
 # public/, static/ and assets/ too (public/index.php, public/js/app.js).
