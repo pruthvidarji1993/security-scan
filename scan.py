@@ -270,6 +270,7 @@ def merge_parts(parts, files, executive=None):
     return m, left
 
 
+TOKENS = 0  # AI tokens used this run, shown at the end
 MODEL = None  # set in main(); None = the machine's default model
 
 
@@ -390,7 +391,9 @@ def ai_review(repo, out, cfg, files):
         tokens, cost = tokens + t, cost + c
         merged, left = merge_parts(parts, files, executive)
         (out / "review.json").write_text(json.dumps(merged, indent=1))
-    say(f"AI review used {tokens:,} tokens (${cost:.2f}) in {len(parts)} pass(es)")
+    global TOKENS
+    TOKENS += tokens
+    say(f"AI review used {tokens:,} tokens in {len(parts)} pass(es)")
     return "ok", left
 
 
@@ -457,7 +460,7 @@ def main():
     day_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_json(STATE, {})
-    rows, todo, html_reports = [], [], []
+    rows, todo, html_reports, saved = [], [], [], []
     explicit = [Path(a).expanduser().resolve() for i, a in enumerate(sys.argv[1:], 1)
                 if not a.startswith("--") and sys.argv[i - 1] != "--model"]
     # `scan.py <path>`: scan exactly these; like scheduled runs, only the commits since the last
@@ -493,6 +496,7 @@ def main():
                                 "full_at": now if mode == "full" else prev.get("full_at", prev.get("at", now)),
                                 "full_sha": head if mode == "full" else prev.get("full_sha", prev.get("sha"))}
             STATE.write_text(json.dumps(state, indent=1))
+            saved.append(repo.name)
         rows.append((repo.name, res["status"], res["mode"], res.get("risk", ""),
                      f"{res.get('counts', {})} review={res.get('review', '')}"))
     for repo, _, _ in todo[cfg["max_repos_per_run"]:]:
@@ -518,6 +522,12 @@ def main():
         print(f"\nreport: {p}")
         if opener and "--no-open" not in sys.argv and p.exists():
             subprocess.run([opener, str(p)], capture_output=True)
+    if html_reports:
+        if TOKENS:
+            say(f"total AI tokens used: {TOKENS:,}")
+        if saved:
+            say("scan history saved: the next scan reads only what changed since this one "
+                "(use --full to rescan everything)")
     if sys.platform == "darwin":
         subprocess.run(["osascript", "-e",
                         f'display notification "{scanned} repos scanned" with title "Security scan"'],
