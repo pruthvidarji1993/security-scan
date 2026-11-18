@@ -270,6 +270,32 @@ def merge_parts(parts, files, executive=None):
     return m, left
 
 
+MODEL = None  # set in main(); None = the machine's default model
+
+
+def choose_model(argv):
+    """--model X wins; else ask on a terminal; else (cron/CI) None = machine default."""
+    if "--model" in argv:
+        i = argv.index("--model")
+        if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+            sys.exit("[security-scan] --model needs a name, e.g. --model sonnet")
+        return argv[i + 1]
+    if not sys.stderr.isatty():
+        return None
+    try:  # read the keyboard directly, so it also works when stdin is a pipe (curl | bash run.sh)
+        tty = open("/dev/tty")
+    except OSError:  # no terminal (cron, launchd, CI)
+        return None
+    opts = [None, "sonnet", "opus", "haiku"]
+    print("Choose the model for the AI review:\n  1) machine default\n  2) sonnet\n  3) opus\n  4) haiku", file=sys.stderr)
+    while True:
+        print("Model [1]: ", end="", file=sys.stderr, flush=True)
+        a = tty.readline().strip() or "1"
+        if a in "1234" and len(a) == 1:
+            return opts[int(a) - 1]
+        print("Enter 1-4.", file=sys.stderr)
+
+
 def claude_pass(repo, out, timeout, prompt):
     """One headless `claude -p` run. Returns (tokens, cost, error or None)."""
     # Token control: only the 4 tools it needs, no skills/MCP servers/session file, and settings from
@@ -277,7 +303,7 @@ def claude_pass(repo, out, timeout, prompt):
     # fixed tokens per run.
     cmd = ["claude", "-p", prompt, "--output-format", "json",
            "--tools", "Read,Grep,Glob,Edit", "--disable-slash-commands", "--strict-mcp-config",
-           "--no-session-persistence", "--setting-sources", "user",
+           "--no-session-persistence", "--setting-sources", "user", *(["--model", MODEL] if MODEL else []),
            "--add-dir", str(out), "--add-dir", str(SKILL),
            "--allowedTools", "Read", "Grep", "Glob", f"Edit(/{out}/**)"]
     try:
@@ -415,6 +441,10 @@ def main():
            "full_scan_every_days": 30, **load_json(os.environ.get("SECURITY_SCAN_CONFIG", HERE / "config.json"), {})}
     if "--no-ai" in sys.argv:
         cfg["ai_review"] = False
+    global MODEL
+    if cfg["ai_review"]:
+        MODEL = choose_model(sys.argv)
+        say(f"AI review model: {MODEL or 'machine default'}")
     day_dir = HERE / "reports" / datetime.now().strftime("%Y-%m-%d_%H%M")
     (HERE / "reports").mkdir(exist_ok=True)
     lock = open(HERE / "reports" / ".lock", "w")
@@ -428,7 +458,8 @@ def main():
 
     state = load_json(STATE, {})
     rows, todo, html_reports = [], [], []
-    explicit = [Path(a).expanduser().resolve() for a in sys.argv[1:] if not a.startswith("--")]
+    explicit = [Path(a).expanduser().resolve() for i, a in enumerate(sys.argv[1:], 1)
+                if not a.startswith("--") and sys.argv[i - 1] != "--model"]
     # `scan.py <path>`: scan exactly these; like scheduled runs, only the commits since the last
     # completed scan of that path unless --full
     for repo in explicit or configured(cfg, rows):

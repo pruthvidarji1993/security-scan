@@ -145,6 +145,10 @@ Then edit [`config.json`](config.json):
 New projects under `roots` are found automatically, and only projects with new commits are
 scanned. `python3 scan.py` runs once now.
 
+**Model for the AI review:** in a terminal, `scan.py` asks which model to use (machine default,
+sonnet, opus or haiku) before it starts. Skip the question with `--model sonnet` (any model name
+`claude` accepts). Scheduled or piped runs never ask and use the machine default.
+
 ## Use it inside Claude Code
 
 `./setup.sh` adds the skill to Claude Code, so you can type `/secure-review` in any project.
