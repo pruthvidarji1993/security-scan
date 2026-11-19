@@ -732,6 +732,7 @@ def cmd_scan(a):
         notes.append("no known stack detected - " + ("no dependency manifest found" if mode == "deps" else
                      "ran only the language-agnostic tools (semgrep OWASP rules, gitleaks)"))
     tools, found = [], []
+    want = {"sast", "sca", "secrets"} if a.types is None else set(filter(None, a.types.split(",")))
 
     def py_ready():
         try:
@@ -741,23 +742,25 @@ def cmd_scan(a):
             return False
 
     for p in projects:
-        if {"node", "python"} & set(p["stacks"]):
+        if {"node", "python"} & set(p["stacks"]) and "sca" in want:
             found += guarded("supply-chain", p["path"], tools, scan_supply_chain, root, p["path"], set(p["stacks"]), tools)
-        if "node" in p["stacks"]:
+        if "node" in p["stacks"] and want & {"sast", "sca"}:
             found += guarded("web-secure-verification", p["path"], tools, scan_wsv, root, p["path"],
                              set(p["stacks"]), mode, tools, raw)
-        if "python" in p["stacks"] and py_ready():
-            if mode != "deps":
+        if "python" in p["stacks"] and want & {"sast", "sca"} and py_ready():
+            if mode != "deps" and "sast" in want:
                 found += guarded("bandit", p["path"], tools, scan_bandit, root, p["path"], changed, tools)
-            found += guarded("pip-audit", p["path"], tools, scan_pip_audit, root, p["path"], tools)
+            if "sca" in want:
+                found += guarded("pip-audit", p["path"], tools, scan_pip_audit, root, p["path"], tools)
     npm_locks = sorted({lf for p in projects if "node" in p["stacks"] and not (root / p["path"] / "node_modules").is_dir()
                         for lf in [node_lockfile(root, p["path"])] if lf})
-    if stacks & OSV_STACKS or npm_locks:
+    if (stacks & OSV_STACKS or npm_locks) and "sca" in want:
         found += guarded("osv-scanner", ".", tools, scan_osv, root, tools, bool(stacks & OSV_STACKS), npm_locks)
     if mode != "deps":
-        if py_ready():
+        if "sast" in want and py_ready():
             found += guarded("semgrep", ".", tools, scan_semgrep, root, stacks, changed, tools)
-        found += guarded("gitleaks", ".", tools, scan_gitleaks, root, mode, changed, is_git, tools, raw, base)
+        if "secrets" in want:
+            found += guarded("gitleaks", ".", tools, scan_gitleaks, root, mode, changed, is_git, tools, raw, base)
     found = [f for f in found if not re.match(r"(.*/)?\.(claude|secure-review)/", f.get("file") or "")]
     if is_git:
         committed = lambda f: f.get("source") == "gitleaks" and "Committed in" in f.get("detail", "")
@@ -1149,6 +1152,7 @@ def main():
     s.add_argument("--root", default=".")
     s.add_argument("--mode", choices=["diff", "full", "deps"], default="diff")
     s.add_argument("--base")
+    s.add_argument("--types", help="comma list of sast,sca,secrets to run (default: all three; empty = none)")
     s.add_argument("--out")
     s.add_argument("--changed-from", help="file listing the changed paths, one per line (instead of git diff)")
     r = sub.add_parser("report")

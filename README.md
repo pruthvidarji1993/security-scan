@@ -145,9 +145,14 @@ Then edit [`config.json`](config.json):
 New projects under `roots` are found automatically, and only projects with new commits are
 scanned. `python3 scan.py` runs once now.
 
-**Model for the AI review:** in a terminal, `scan.py` asks which model to use (machine default,
-sonnet, opus or haiku) before it starts. Skip the question with `--model sonnet` (any model name
-`claude` accepts). Scheduled or piped runs never ask and use the machine default.
+**Questions before a scan (in a terminal):**
+1. **Scan types** (pick any): SAST (semgrep, bandit), SCA (pip-audit, npm audit, osv-scanner, supply-chain), Secret Scanning (gitleaks), AI code review. Enter = the three scanners, no AI, no tokens.
+2. **AI focus** (only if AI review was picked): Authentication, Authorization, Data security, Endpoint, Confidentiality, Key management. Enter = all.
+3. **Model** (only if AI review was picked): machine default, sonnet, opus or haiku.
+
+Skip the questions with flags: `--types sast,sca,secrets,ai`, `--focus authn,authz,data,endpoint,confidentiality,keys`, `--model sonnet`
+(`--no-ai` still works). Scheduled or piped runs never ask: they run all four types, all areas, machine default model.
+A run limited to some types or focus areas does not save scan history, so the next full-type scan still starts from the last complete one.
 
 ## Use it inside Claude Code
 
