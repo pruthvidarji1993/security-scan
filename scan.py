@@ -288,7 +288,7 @@ FOCUS_ALL = {  # focus area -> what the AI review is told to look at (sections o
 FOCUS = set(FOCUS_ALL)
 
 
-def pick(argv, flag, title, opts, enter, no_terminal):
+def pick(argv, flag, title, opts, enter, no_terminal, extra=()):
     """Choose one or more of opts [(key, label)]: `flag a,b` wins; else ask on a terminal (Enter = `enter`);
     else (cron/CI) `no_terminal`. Returns a set of keys."""
     keys = [k for k, _ in opts]
@@ -296,14 +296,16 @@ def pick(argv, flag, title, opts, enter, no_terminal):
         i = argv.index(flag)
         val = argv[i + 1] if i + 1 < len(argv) else ""
         got = {v for v in val.split(",") if v}
-        bad = got - set(keys)
-        if not got or bad:
-            sys.exit(f"[security-scan] {flag} takes a comma list of: {', '.join(keys)}")
+        if val == "none":
+            return set()
+        if not got or got - set(keys) - set(extra):
+            sys.exit(f"[security-scan] {flag} takes a comma list of: {', '.join(keys + list(extra))}, or none")
         return got
     tty = tty_in()
     if not tty:
         return set(no_terminal)
-    print(f"\n{title} (numbers separated by commas, a = all, Enter = {', '.join(sorted(enter, key=keys.index))})",
+    print(f"\n{title}\n(numbers separated by commas, a = all, n = none, Enter = "
+          f"{'none' if not enter else 'all' if set(enter) == set(keys) else ', '.join(sorted(enter, key=keys.index))})",
           file=sys.stderr)
     for n, (_, label) in enumerate(opts, 1):
         print(f"  {n}) {label}", file=sys.stderr)
@@ -314,6 +316,8 @@ def pick(argv, flag, title, opts, enter, no_terminal):
             return set(enter)
         if a == "a":
             return set(keys)
+        if a == "n":
+            return set()
         nums = [x for x in a.split(",") if x]
         if nums and all(x.isdigit() and 1 <= int(x) <= len(keys) for x in nums):
             return {keys[int(x) - 1] for x in nums}
@@ -330,16 +334,12 @@ def tty_in():
         return None
 
 
-def choose_types(argv, ai_allowed):
-    opts = [("sast", "SAST - Static Application Security Testing  (semgrep, bandit)"),
-            ("sca", "SCA - Software Composition Analysis         (pip-audit, npm audit, osv-scanner, supply-chain)"),
-            ("secrets", "Secret Scanning                               (gitleaks: committed keys, passwords, tokens)")]
-    if ai_allowed:
-        opts.append(("ai", "AI code review                               (reads source files, uses tokens)"))
-    t = pick(argv, "--types", "Which scan types?", opts, SCANNERS, {k for k, _ in opts})
-    if ai_allowed and "ai" not in t and tty_in() and "--types" not in argv:
-        say("note: authentication, authorization and confidentiality are only checked by the AI code review")
-    return t
+def choose_scanners(argv):
+    """Question 1. `--types` may also hold `ai` (= AI review of all areas, unless --focus narrows it)."""
+    opts = [("sast", "SAST             semgrep, bandit"),
+            ("sca", "SCA              pip-audit, npm audit, osv-scanner, supply-chain"),
+            ("secrets", "Secret Scanning  gitleaks: committed keys, passwords, tokens")]
+    return pick(argv, "--types", "Question 1 of 3 - Scanners (free, no AI)", opts, SCANNERS, SCANNERS, extra=("ai",))
 
 
 def choose_focus(argv):
@@ -349,7 +349,7 @@ def choose_focus(argv):
             ("endpoint", "Endpoint           API routes, CSRF/SSRF, file upload"),
             ("confidentiality", "Confidentiality   data leaks, caching, logging, privacy"),
             ("keys", "Key management     secrets, configuration, tokens")]
-    return pick(argv, "--focus", "Which areas should the AI review focus on?", opts, FOCUS_ALL, FOCUS_ALL)
+    return pick(argv, "--focus", "Question 2 of 3 - AI code review by area (uses tokens)", opts, set(), FOCUS_ALL)
 
 
 def choose_model(argv):
@@ -362,14 +362,15 @@ def choose_model(argv):
     tty = tty_in()
     if not tty:
         return None
-    opts = [None, "sonnet", "opus", "haiku"]
-    print("\nWhich model for the AI review?\n  1) machine default\n  2) sonnet\n  3) opus\n  4) haiku", file=sys.stderr)
+    opts = [None, "sonnet", "opus"]  # haiku cannot create the review file with the tools it is given
+    print("\nQuestion 3 of 3 - Which model for the AI review?\n  1) machine default\n  2) sonnet\n  3) opus",
+          file=sys.stderr)
     while True:
-        print("Model [1]: ", end="", file=sys.stderr, flush=True)
+        print("Your choice [1]: ", end="", file=sys.stderr, flush=True)
         a = tty.readline().strip() or "1"
-        if a in "1234" and len(a) == 1:
+        if a in "123" and len(a) == 1:
             return opts[int(a) - 1]
-        print("Enter 1-4.", file=sys.stderr)
+        print("Enter 1-3.", file=sys.stderr)
 
 
 def claude_pass(repo, out, timeout, prompt):
@@ -528,14 +529,25 @@ def main():
     if "--no-ai" in sys.argv:
         cfg["ai_review"] = False
     global MODEL, TYPES, FOCUS
-    TYPES = choose_types(sys.argv, cfg["ai_review"])
-    cfg["ai_review"] = "ai" in TYPES
-    if cfg["ai_review"]:
-        FOCUS = choose_focus(sys.argv)
+    TYPES = choose_scanners(sys.argv)
+    ai_flag = "ai" in TYPES
+    TYPES.discard("ai")
+    if not cfg["ai_review"]:
+        FOCUS = set()
+    elif "--focus" in sys.argv or "--types" not in sys.argv or ai_flag:
+        FOCUS = choose_focus(sys.argv) if "--focus" in sys.argv or not ai_flag else set(FOCUS_ALL)
+    else:
+        FOCUS = set()  # --types given without ai: the caller decided, do not ask
+    if FOCUS:
+        TYPES.add("ai")
+    if not TYPES:
+        sys.exit("[security-scan] nothing selected: pick at least one scanner or one AI area")
+    cfg["ai_review"] = bool(FOCUS)
+    if FOCUS:
         MODEL = choose_model(sys.argv)
         say(f"AI review model: {MODEL or 'machine default'}")
     say("scan types: " + ", ".join(sorted(TYPES, key=["sast", "sca", "secrets", "ai"].index)) +
-        (f"; AI focus: {', '.join(sorted(FOCUS))}" if cfg["ai_review"] and FOCUS != set(FOCUS_ALL) else ""))
+        (f"; AI focus: {', '.join(sorted(FOCUS))}" if FOCUS and FOCUS != set(FOCUS_ALL) else ""))
     day_dir = HERE / "reports" / datetime.now().strftime("%Y-%m-%d_%H%M")
     (HERE / "reports").mkdir(exist_ok=True)
     lock = open(HERE / "reports" / ".lock", "w")

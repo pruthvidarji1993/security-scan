@@ -146,13 +146,14 @@ New projects under `roots` are found automatically, and only projects with new c
 scanned. `python3 scan.py` runs once now.
 
 **Questions before a scan (in a terminal):**
-1. **Scan types** (pick any): SAST (semgrep, bandit), SCA (pip-audit, npm audit, osv-scanner, supply-chain), Secret Scanning (gitleaks), AI code review. Enter = the three scanners, no AI, no tokens.
-2. **AI focus** (only if AI review was picked): Authentication, Authorization, Data security, Endpoint, Confidentiality, Key management. Enter = all.
-3. **Model** (only if AI review was picked): machine default, sonnet, opus or haiku.
+1. **Scanners** (free, no AI): SAST (semgrep, bandit), SCA (pip-audit, npm audit, osv-scanner, supply-chain), Secret Scanning (gitleaks). Enter = all three.
+2. **AI code review by area** (uses tokens): Authentication, Authorization, Data security, Endpoint, Confidentiality, Key management. Enter or `n` = no AI review.
+3. **Model**, asked only if you picked an AI area: machine default, sonnet or opus.
 
-Skip the questions with flags: `--types sast,sca,secrets,ai`, `--focus authn,authz,data,endpoint,confidentiality,keys`, `--model sonnet`
-(`--no-ai` still works). Scheduled or piped runs never ask: they run all four types, all areas, machine default model.
-A run limited to some types or focus areas does not save scan history, so the next full-type scan still starts from the last complete one.
+Skip the questions with flags: `--types sast,sca,secrets` (or `none`), `--focus authn,authz,data,endpoint,confidentiality,keys`,
+`--model sonnet`. `--types ...,ai` means AI review of every area. `--no-ai` still works. Scheduled or piped runs never ask:
+they run all scanners, all AI areas and the machine default model.
+A run limited to some scanners or AI areas does not save scan history, so the next full scan still starts from the last complete one.
 
 ## Use it inside Claude Code
 
