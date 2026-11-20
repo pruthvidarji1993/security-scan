@@ -6,9 +6,9 @@ One command that checks your project for security problems and gives you a repor
 or send to a client.
 
 It works out what your project is built with (Next.js, React, Node API, Django, Flask, FastAPI,
-PHP/Laravel, React Native, Docker), runs the right security tools, and then has Claude read your
-code for the problems tools usually miss: users seeing other users' data, missing login checks,
-forged tokens and similar flaws. You do not set anything up per project.
+PHP/Laravel, React Native, Docker), runs the right security tools, and can then have Claude read
+your code for the problems tools usually miss: users seeing other users' data, missing login
+checks, forged tokens and similar flaws. You do not set anything up per project.
 
 ## Quick start
 
@@ -27,7 +27,13 @@ bash <(curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com
 To scan another folder, add its path at the end. Your project is never changed: nothing is
 added, edited or committed.
 
-When it finishes, the findings are printed in the terminal and the report opens in your browser.
+**4. Answer three short questions** (see [Choosing what to scan](#choosing-what-to-scan)): which
+scanners, which areas Claude should review, and which model. **Pressing Enter on every question
+runs the three automatic scanners only, with no Claude review.** To get the Claude code review,
+pick at least one area in question 2 (`a` = all six).
+
+When it finishes, the findings are printed in the terminal, followed by the AI tokens used (if
+Claude reviewed code) and a note that scan history was saved. The report opens in your browser.
 
 ## First scan and repeat scans
 
@@ -49,15 +55,43 @@ per folder, so a different folder starts with a full scan.
 All of this happens automatically, whether you run the command yourself or on a schedule. You
 only need `--full` when you want a full check right now, for example before a client delivery.
 
+A scan that skipped a scanner, or reviewed only some AI areas, does **not** save scan history
+(the terminal says so). Otherwise the next scan would skip code that was never fully checked.
+
+## Choosing what to scan
+
+In a terminal, the scan asks three questions before it starts. Type numbers separated by commas,
+`a` for all, `n` for none.
+
+1. **Scanners** (free, no AI): SAST (semgrep, bandit), SCA (pip-audit, npm audit, osv-scanner,
+   supply-chain checks), Secret Scanning (gitleaks). Enter = all three.
+2. **AI code review by area** (uses tokens): Authentication, Authorization, Data security,
+   Endpoint, Confidentiality, Key management. Enter or `n` = no Claude review.
+3. **Model** (asked only if you picked an area): machine default, sonnet or opus.
+
+Authentication, authorization and confidentiality problems are only found by the Claude review,
+not by the scanners. Picking one area makes the review shorter and cheaper, but findings outside
+that area are not looked for, and scanner findings Claude was not asked about stay *Unverified*.
+
+Scheduled and piped runs (cron, CI) never ask. They run all scanners, all six areas and the
+machine's default model, as before. With no flag, the model is whatever your `claude` CLI uses
+(`ANTHROPIC_MODEL`, or `model` in `~/.claude/settings.json`).
+
 ## Options
 
-Add these after the command (or after the path):
+Add these after the command (or after the path). Any option skips the question it answers.
 
 | Option | What it does |
 |---|---|
 | `--full` | Check the whole project again, not just what changed |
-| `--no-ai` | Only the automatic tools, no Claude review (free, but less thorough) |
+| `--types sast,sca,secrets` | Scanners to run (or `none`). Add `ai` to also review every area |
+| `--focus authn,authz,data,endpoint,confidentiality,keys` | AI review areas (or `none`) |
+| `--model sonnet` | Model for the Claude review (any name `claude` accepts) |
+| `--no-ai` | No Claude review (free, but less thorough) |
 | `--no-open` | Do not open the report in the browser |
+
+Example: `--types sast,secrets --focus authz,keys --model sonnet` asks nothing and runs two
+scanners plus a Claude review of authorization and key management.
 
 ## Reading the report
 
@@ -65,7 +99,8 @@ Add these after the command (or after the path):
   No confirmed issues.
 - Each finding says where it is (`file:line`), how someone could exploit it, and how to fix it.
 - **Confirmed**: Claude checked it and it is real. **Suspicion**: looks wrong but could not be
-  proven. **Unverified**: found by a tool, not checked by Claude (for example with `--no-ai`).
+  proven. **Unverified**: found by a tool, not checked by Claude (for example with `--no-ai`, or when it
+  is outside the AI areas you picked).
 - **Checks table:** each tool has a one-line description of what it does. Look for `skipped` rows. Each one says what was not checked and why
   (usually a missing dependency or lockfile).
 - **Scope** says how much code Claude read, e.g. "read 120 of 150 source files". Files it did
@@ -89,7 +124,8 @@ The automatic tools are free. Only the Claude review costs tokens.
   does not change the total cost.
 - A first scan of a large project can cost about $1.50-2.50. Repeat scans usually take one round.
 - If only non-code files changed (README, lockfile), Claude is not used at all.
-- The cost of each scan is printed at the end. Use `--no-ai` to spend nothing.
+- The total AI tokens used are printed at the end (no dollar amount). Use `--no-ai`, or answer
+  `n` to question 2, to spend nothing.
 
 ## What it checks
 
@@ -111,6 +147,10 @@ found from `package-lock.json`, `yarn.lock` or `pnpm-lock.yaml`. Some JavaScript
 | "nothing was scanned: unchanged since last scan" | Nothing changed since the last scan. Add `--full` to scan again anyway |
 | "git repo has no commits yet" | Make a first commit, or delete the empty `.git` folder to scan it as a plain folder |
 | "folder not found or empty" | Check the path you passed |
+| No questions appear | You passed the matching option, or the run has no terminal (cron, CI, some editor panels). Run it from a normal terminal such as Terminal or the VS Code terminal |
+| "nothing selected" | You answered `n` to both the scanner and the AI-area question. Pick at least one |
+| "scan history not saved" | The run skipped a scanner or some AI areas. Run with all scanners and all areas (or `--full`) to start tracking changes again |
+| A scan with `--model haiku` fails | Haiku cannot write its review file with the tools it is given. Use sonnet or opus |
 | "a scan is already running" | Wait for the other scan to finish, or stop it with `pkill -f security-scan/scan.py` |
 | `skipped` rows in the report | Install dependencies or commit the lockfile it names, then scan again |
 
@@ -143,22 +183,15 @@ Then edit [`config.json`](config.json):
 | `full_scan_every_days` | Do a full scan when the last one is this old (default 30). `0` = never |
 
 New projects under `roots` are found automatically, and only projects with new commits are
-scanned. `python3 scan.py` runs once now.
-
-**Questions before a scan (in a terminal):**
-1. **Scanners** (free, no AI): SAST (semgrep, bandit), SCA (pip-audit, npm audit, osv-scanner, supply-chain), Secret Scanning (gitleaks). Enter = all three.
-2. **AI code review by area** (uses tokens): Authentication, Authorization, Data security, Endpoint, Confidentiality, Key management. Enter or `n` = no AI review.
-3. **Model**, asked only if you picked an AI area: machine default, sonnet or opus.
-
-Skip the questions with flags: `--types sast,sca,secrets` (or `none`), `--focus authn,authz,data,endpoint,confidentiality,keys`,
-`--model sonnet`. `--types ...,ai` means AI review of every area. `--no-ai` still works. Scheduled or piped runs never ask:
-they run all scanners, all AI areas and the machine default model.
-A run limited to some scanners or AI areas does not save scan history, so the next full scan still starts from the last complete one.
+scanned. `python3 scan.py` runs once now. Scheduled runs use all scanners and all six AI areas
+(they never ask questions).
 
 ## Use it inside Claude Code
 
 `./setup.sh` adds the skill to Claude Code, so you can type `/secure-review` in any project.
 Options: `diff` (only your changes, the default), `full` (whole project), `deps` (libraries only).
+The skill does not ask the questions above and uses the model of your Claude Code session. The
+questions belong to `scan.py` / `run.sh`.
 
 ## Safety
 
