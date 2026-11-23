@@ -1,6 +1,6 @@
 ---
 name: secure-review
-description: Standalone security review for any repository. Detects the stack (Next.js, React, Node API, Python with Django/Flask/FastAPI, PHP, React Native, Docker), installs pinned scanners on first use, runs them, adds an AI review of what scanners cannot see (access control, IDOR, mass assignment, session, SSRF, CSRF, file upload, injection, migrations, N+1, API versioning, platform risks), verifies every finding, and writes a developer findings list plus a self-contained HTML client report mapped to OWASP Top 10. Run manually with /secure-review [diff|full|deps] [--base <ref>].
+description: Standalone security review for any repository. Detects the stack (Next.js, React, Node API, Python with Django/Flask/FastAPI, PHP, React Native, Flutter, Docker), installs pinned scanners on first use, runs them, adds an AI review of what scanners cannot see (access control, IDOR, mass assignment, session, SSRF, CSRF, file upload, injection, migrations, N+1, API versioning, platform risks), verifies every finding, and writes a developer findings list plus a self-contained HTML client report mapped to OWASP Top 10. Run manually with /secure-review [diff|full|deps] [--base <ref>].
 argument-hint: '[diff|full|deps] [--base <ref>]'
 disable-model-invocation: true
 ---
@@ -77,6 +77,7 @@ file):
 | `flask`                                  | `references/flask.md`            |
 | `fastapi`                                | `references/fastapi.md`          |
 | `react-native`, `ios` | `references/mobile-desktop.md` |
+| `flutter`                                | `references/flutter.md`          |
 | `php`                                    | `references/php.md`              |
 
 No stack detected, or a stack not listed: still apply `general.md` - semgrep's

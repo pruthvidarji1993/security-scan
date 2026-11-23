@@ -6,7 +6,7 @@ One command that checks your project for security problems and gives you a repor
 or send to a client.
 
 It works out what your project is built with (Next.js, React, Node API, Django, Flask, FastAPI,
-PHP/Laravel, React Native, Docker), runs the right security tools, and can then have Claude read
+PHP/Laravel, React Native, Flutter, Docker), runs the right security tools, and can then have Claude read
 your code for the problems tools usually miss: users seeing other users' data, missing login
 checks, forged tokens and similar flaws. You do not set anything up per project.
 
@@ -15,7 +15,7 @@ checks, forged tokens and similar flaws. You do not set anything up per project.
 **1. You need:** `python3` 3.10+, `git`, and the `claude` CLI logged in. Without `claude` it
 still runs, but only the automatic tools, not the code review.
 
-**2. Install your project's dependencies** (`npm install`, `composer install`, `pod install`).
+**2. Install your project's dependencies** (`npm install`, `composer install`, `pod install`, `flutter pub get`).
 The scan never installs them for you, because install scripts can run any code.
 
 **3. Run this from inside your project:**
