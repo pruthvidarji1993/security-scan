@@ -37,45 +37,35 @@ Claude reviewed code) and a note that scan history was saved. The report opens i
 
 ## First scan and repeat scans
 
-- **First scan:** checks the whole project. On a large project it can take a while (see
+- **First scan:** checks the whole project. A large project can take a while (see
   [Time and cost](#time-and-cost)).
-- **Next scans:** check only what changed since the last scan (new commits and uncommitted
-  files). If nothing changed, it tells you so and prints where the last report is.
-- If the code review failed or was skipped last time, those commits are checked again next time.
-- **Once a month it does a full scan by itself** (if the code changed since the last full scan).
-  A repeat scan only reads changed files, so it can miss a change that breaks something in a file
-  you did not touch, for example a removed login check that an old page relied on. The monthly
-  full scan catches that.
-
-**No git history (e.g. a zip download)?** It still works. Instead of commits, it remembers a
-fingerprint of every file, and the next scan checks only files that are new or changed. Unzip
-each new version into the **same folder** (delete the old contents first): scan history is kept
-per folder, so a different folder starts with a full scan.
-
-All of this happens automatically, whether you run the command yourself or on a schedule. You
-only need `--full` when you want a full check right now, for example before a client delivery.
-
-A scan that skipped a scanner, or reviewed only some AI areas, does **not** save scan history
-(the terminal says so). Otherwise the next scan would skip code that was never fully checked.
+- **Next scans:** check only what changed since the last scan. If nothing changed, it says so and
+  shows where the last report is.
+- **Once a month** it runs a full scan by itself, because a repeat scan can miss a change that
+  breaks a file you did not touch. Use `--full` to run a full scan right now, for example before
+  a client delivery.
+- **No git (e.g. a zip download)?** It still works: it remembers every file and checks only new
+  or changed ones. Unzip each new version into the **same folder**, because history is kept per
+  folder.
+- A scan that skipped a scanner or some AI areas does **not** save history (the terminal says so),
+  so the next scan does not skip code that was never fully checked.
 
 ## Choosing what to scan
 
-In a terminal, the scan asks three questions before it starts. Type numbers separated by commas,
-`a` for all, `n` for none.
+In a terminal, the scan asks three questions. Type numbers separated by commas, `a` for all, `n`
+for none.
 
-1. **Scanners** (free, no AI): SAST (semgrep, bandit), SCA (pip-audit, npm audit, osv-scanner,
-   supply-chain checks), Secret Scanning (gitleaks). Enter = all three.
+1. **Scanners** (free): SAST (semgrep, bandit, Flutter checks), SCA (pip-audit, npm audit,
+   osv-scanner, supply-chain checks), Secret scanning (gitleaks). Enter = all three.
 2. **AI code review by area** (uses tokens): Authentication, Authorization, Data security,
    Endpoint, Confidentiality, Key management. Enter or `n` = no Claude review.
-3. **Model** (asked only if you picked an area): machine default, sonnet or opus.
+3. **Model** (only if you picked an area): machine default, sonnet or opus.
 
-Authentication, authorization and confidentiality problems are only found by the Claude review,
-not by the scanners. Picking one area makes the review shorter and cheaper, but findings outside
-that area are not looked for, and scanner findings Claude was not asked about stay *Unverified*.
+Login, permission and data-leak problems are found only by the Claude review, not by the scanners.
+Fewer areas means a shorter, cheaper review, but problems outside those areas are not looked for.
 
-Scheduled and piped runs (cron, CI) never ask. They run all scanners, all six areas and the
-machine's default model, as before. With no flag, the model is whatever your `claude` CLI uses
-(`ANTHROPIC_MODEL`, or `model` in `~/.claude/settings.json`).
+Scheduled and piped runs (cron, CI) never ask: they run all scanners, all six areas and your
+`claude` CLI's default model.
 
 ## Options
 
@@ -83,7 +73,7 @@ Add these after the command (or after the path). Any option skips the question i
 
 | Option | What it does |
 |---|---|
-| `--full` | Check the whole project again, not just what changed |
+| `--full` | Check the whole project, not just what changed |
 | `--types sast,sca,secrets` | Scanners to run (or `none`). Add `ai` to also review every area |
 | `--focus authn,authz,data,endpoint,confidentiality,keys` | AI review areas (or `none`) |
 | `--model sonnet` | Model for the Claude review (any name `claude` accepts) |
@@ -116,41 +106,35 @@ Where reports are saved: `~/.cache/security-scan/reports/<date>/<project>/report
 
 ## Time and cost
 
-The automatic tools are free. Only the Claude review costs tokens.
+The scanners are free. Only the Claude review costs tokens.
 
-- Claude reads your code in rounds of 40 files, up to 5 rounds per scan, **3 rounds at the same
-  time**. In my test, the same project took 7 minutes instead of 16.
-- Each round takes 2-10 minutes and costs about $0.30-0.50. Running rounds at the same time
-  does not change the total cost.
+- Claude reads your code in rounds of 40 files, 3 rounds at a time. A round takes 2-10 minutes and
+  costs about $0.30-0.50.
 - A first scan of a large project can cost about $1.50-2.50. Repeat scans usually take one round.
-- If only non-code files changed (README, lockfile), Claude is not used at all.
-- The total AI tokens used are printed at the end (no dollar amount). Use `--no-ai`, or answer
-  `n` to question 2, to spend nothing.
+- If only non-code files changed (README, lockfile), Claude is not used.
+- The total AI tokens are printed at the end. Use `--no-ai`, or answer `n` to question 2, to spend
+  nothing.
 
 ## What it checks
 
 | Part | What it looks for |
 |---|---|
-| Automatic tools | Known dangerous code patterns, passwords and keys committed to git (including old commits), libraries with known vulnerabilities |
-| Dependencies | Packages with no version, packages installed from a URL, a missing lockfile, packages that run scripts when installed. A version range such as `>=2.0` is fine. Deprecated packages are High; just being behind a newer version is Low |
-| Claude code review | Users reaching other users' data, admin pages without login checks, tokens that are not verified, injection (SQL, shell commands, file paths), weak password storage, missing rate limits, unsafe uploads, risky deploy settings |
+| Scanners | Dangerous code patterns, passwords and keys committed to git (including old commits), libraries with known vulnerabilities, risky dependency setups (no version, installed from a URL, no lockfile) |
+| Flutter apps | Tokens in SharedPreferences, disabled TLS checks, hardcoded keys, weak crypto, unsafe SQL and WebViews, secrets in logs, debuggable or backup-enabled Android builds, iOS App Transport Security off, release builds signed with the debug key |
+| Claude code review | Users reaching other users' data, admin pages without login checks, unverified tokens, injection, weak password storage, missing rate limits, unsafe uploads, risky deploy settings |
 
-Even without `node_modules` (for example on a fresh clone), vulnerable npm libraries are still
-found from `package-lock.json`, `yarn.lock` or `pnpm-lock.yaml`. Some JavaScript checks need
-`node_modules`, so install for the full picture.
+On a fresh clone, vulnerable npm libraries are still found from the lockfile, but some JavaScript
+checks need `node_modules`, so install dependencies first for the full picture.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
 | The `curl` command prints an error | Use git instead (also better on a shared office network, where GitHub limits requests): see below |
-| "nothing was scanned: unchanged since last scan" | Nothing changed since the last scan. Add `--full` to scan again anyway |
+| "nothing was scanned: unchanged" | Nothing changed since the last scan. Add `--full` to scan again |
 | "git repo has no commits yet" | Make a first commit, or delete the empty `.git` folder to scan it as a plain folder |
-| "folder not found or empty" | Check the path you passed |
-| No questions appear | You passed the matching option, or the run has no terminal (cron, CI, some editor panels). Run it from a normal terminal such as Terminal or the VS Code terminal |
-| "nothing selected" | You answered `n` to both the scanner and the AI-area question. Pick at least one |
-| "scan history not saved" | The run skipped a scanner or some AI areas. Run with all scanners and all areas (or `--full`) to start tracking changes again |
-| A scan with `--model haiku` fails | Haiku cannot write its review file with the tools it is given. Use sonnet or opus |
+| No questions appear | You passed the matching option, or there is no terminal (cron, CI). Run it from a normal terminal |
+| `--model haiku` fails | Use sonnet or opus |
 | "a scan is already running" | Wait for the other scan to finish, or stop it with `pkill -f security-scan/scan.py` |
 | `skipped` rows in the report | Install dependencies or commit the lockfile it names, then scan again |
 
@@ -210,9 +194,7 @@ python3 scan.py --selftest
 python3 skill/secure-review/scripts/secure_review.py selftest
 ```
 
-Built on the `secure-review` skill in [`skill/`](skill/secure-review/SKILL.md). Scan history is
-kept in `state.json` (one entry per project folder, so a fresh clone in another folder starts
-with a full scan).
+Built on the `secure-review` skill in [`skill/`](skill/secure-review/SKILL.md).
 
 ## License
 
