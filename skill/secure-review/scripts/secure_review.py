@@ -39,10 +39,10 @@ BUNDLED_NAME = re.compile(r"\.(min|chunk|bundle)\.|[.-][0-9a-f]{8,}\.(m?js|css)(
                           r"\.(map|css|scss|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot)$", re.I)
 MANIFESTS = re.compile(r"(^|/)(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|requirements[^/]*\.txt|"
                        r"pyproject\.toml|poetry\.lock|Pipfile(\.lock)?|uv\.lock|composer\.(json|lock)|"
-                       r"Podfile(\.lock)?|Package\.resolved|pubspec\.(yaml|lock))$")
+                       r"Podfile(\.lock)?|Package\.resolved|pubspec\.(yaml|lock)|pom\.xml|(buildscript-)?gradle\.lockfile)$")
 # Ecosystems osv-scanner audits; npm and PyPI are covered by web-secure-verification and pip-audit,
 # except npm on a fresh clone (no node_modules), where osv-scanner reads the lockfile instead.
-OSV_STACKS = {"php", "ios", "flutter"}
+OSV_STACKS = {"php", "ios", "flutter", "jvm", "android"}
 NODE_LOCKS = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
 SEVERITIES = ["critical", "high", "medium", "low", "info"]
 # Scanners in web-secure-verification that report code quality, not security.
@@ -125,8 +125,12 @@ def detect(root):
             stacks.add("docker")
         if "composer.json" in files:
             stacks.add("php")
-        if {"Podfile", "Package.swift"} & set(files):  # native iOS side of React Native apps
+        if {"Podfile", "Package.swift"} & set(files) or any(d.endswith(".xcodeproj") for d in dirs):  # native iOS, also the ios/ of React Native and Flutter
             stacks.add("ios")
+        gradle = [f for f in files if f in {"build.gradle", "build.gradle.kts"}]
+        if "pom.xml" in files or gradle:  # Maven / Gradle: an Android module, or a Java/Kotlin service
+            text = " ".join(Path(dirpath, f).read_text(encoding="utf-8", errors="ignore") for f in gradle)
+            stacks.add("android" if "com.android." in text else "jvm")
         if stacks:
             projects.append({"path": rel.as_posix() if rel.parts else ".", "stacks": sorted(stacks)})
     return projects
@@ -320,6 +324,8 @@ TOOL_DESC = {
     "pip-audit": "Matches your Python libraries against known vulnerabilities and lists the fixed versions.",
     "semgrep": "Scans code for known insecure patterns (injection, unsafe file access, weak crypto), "
                "using security rules for your stack.",
+    "flutter-checks": "Checks Flutter code and the Android/iOS settings for insecure storage, disabled TLS checks, weak crypto and debug builds.",
+    "native-config-checks": "Checks Android and iOS settings (manifest, network config, Info.plist, signing) for debuggable builds, cleartext HTTP and the debug key.",
     "gitleaks": "Searches the code and its git history for passwords, API keys and tokens that were committed.",
     "python-tools": "Installs the Python-based scanners the first time they are needed.",
 }
@@ -627,9 +633,9 @@ def scan_osv(root, tools, recursive=True, lockfiles=()):
     except ValueError:
         no_lock = "no package sources" in (err or "").lower()  # composer.json without composer.lock, etc.
         tools.append(tool("osv-scanner", ".", "skipped" if no_lock else "failed",
-                          "no lockfile found (composer.lock / Podfile.lock / pubspec.lock) - generate one and re-run" if no_lock else tail(err)))
+                          "no lockfile found (composer.lock / Podfile.lock / pubspec.lock / pom.xml / gradle.lockfile) - generate one and re-run" if no_lock else tail(err)))
         return []
-    what = (["Composer, CocoaPods, pub"] if recursive else []) + [f"{lf} (node_modules missing)" for lf in lockfiles]
+    what = (["Composer, CocoaPods, pub, Maven, Gradle lockfiles"] if recursive else []) + [f"{lf} (node_modules missing)" for lf in lockfiles]
     tools.append(tool("osv-scanner", ".", "ran", "; ".join(what), len(found)))
     return found
 
@@ -659,13 +665,17 @@ FLUTTER_NATIVE = [  # (file regex, line/text regex, title, severity, owasp, cwe,
     (r"AndroidManifest\.xml$", r'android:debuggable="true"', "Android app is debuggable", "high", "A05", 489, "Remove android:debuggable from release"),
     (r"AndroidManifest\.xml$", r'android:allowBackup="true"', "Android backup enabled", "medium", "A05", 530, 'Set android:allowBackup="false"'),
     (r"AndroidManifest\.xml$", r'usesCleartextTraffic="true"', "Android allows cleartext HTTP", "high", "A02", 319, "Remove usesCleartextTraffic"),
+    (r"network_security_config[^/]*\.xml$", r'cleartextTrafficPermitted="true"', "Network security config allows cleartext HTTP", "high", "A02", 319,
+     "Set cleartextTrafficPermitted to false"),
     (r"Info\.plist$", r"NSAllowsArbitraryLoads</key>\s*<true/>", "iOS App Transport Security disabled", "high", "A02", 319, "Remove NSAllowsArbitraryLoads"),
     (r"build\.gradle(\.kts)?$", r'signingConfig\s*=?\s*signingConfigs\.(getByName\("debug"\)|debug)', "Release build signed with the debug key", "medium", "A05", 321,
      "Create a release keystore and sign with it"),
 ]
 
 
-def scan_flutter(root, proj, changed, tools):
+def scan_flutter(root, proj, changed, tools, app=True):
+    """app=False: only the Android/iOS config rules, for native and React Native projects (no Dart, no pubspec)."""
+    name = "flutter-checks" if app else "native-config-checks"
     pdir, found = root / proj, []
     skip = SKIP_DIRS | SKIP_SCAN_DIRS | {"integration_test", ".dart_tool", "generated", "ephemeral"}
     dart = 0
@@ -675,7 +685,7 @@ def scan_flutter(root, proj, changed, tools):
         for f in files:
             path = Path(dp, f)
             rel = rel_path(path, root)
-            if f.endswith(".dart") and not f.endswith((".g.dart", ".freezed.dart")):
+            if app and f.endswith(".dart") and not f.endswith((".g.dart", ".freezed.dart")):
                 dart += 1
             elif not any(re.search(n[0], f) for n in FLUTTER_NATIVE):
                 continue
@@ -690,23 +700,23 @@ def scan_flutter(root, proj, changed, tools):
                 for n, line in enumerate(text.splitlines(), 1):
                     for rx, title, sev, ow, cwe, fix in FLUTTER_DART:
                         if re.search(rx, line) and not line.lstrip().startswith("//"):
-                            found.append(finding("flutter-checks", title, sev, title, rel, n, line.strip()[:200], fix, ow, cwe))
+                            found.append(finding(name, title, sev, title, rel, n, line.strip()[:200], fix, ow, cwe))
                 continue
             if re.search(r"/(debug|profile)/", "/" + rel):
                 continue
             for frx, rx, title, sev, ow, cwe, fix in FLUTTER_NATIVE:
                 m = re.search(frx, f) and re.search(rx, text)
                 if m:
-                    found.append(finding("flutter-checks", title, sev, title, rel, text[:m.start()].count("\n") + 1,
+                    found.append(finding(name, title, sev, title, rel, text[:m.start()].count("\n") + 1,
                                          m.group(0)[:200], fix, ow, cwe))
-    if dart and not handled and changed is None:
-        found.append(finding("flutter-checks", "No global error handler", "low", "No global error handler (FlutterError.onError / runZonedGuarded)",
+    if app and dart and not handled and changed is None:
+        found.append(finding(name, "No global error handler", "low", "No global error handler (FlutterError.onError / runZonedGuarded)",
                              rel_path(pdir / "pubspec.yaml", root), None, "Uncaught errors may show raw errors or crash the app",
                              "Add FlutterError.onError and PlatformDispatcher.instance.onError; show a generic message", "A05", 209))
-    if not (pdir / "pubspec.lock").is_file():
-        found.append(finding("flutter-checks", "No pubspec.lock", "low", "pubspec.lock is missing: dependency versions are not pinned",
+    if app and not (pdir / "pubspec.lock").is_file():
+        found.append(finding(name, "No pubspec.lock", "low", "pubspec.lock is missing: dependency versions are not pinned",
                              rel_path(pdir / "pubspec.yaml", root), None, "Dependencies cannot be audited or reproduced", "Run `flutter pub get` and commit pubspec.lock", "A06"))
-    tools.append(tool("flutter-checks", proj, "ran", f"{dart} Dart files + Android/iOS config", len(found)))
+    tools.append(tool(name, proj, "ran", f"{dart} Dart files + Android/iOS config" if app else "Android/iOS config", len(found)))
     return found
 
 
@@ -714,8 +724,8 @@ def scan_semgrep(root, stacks, changed, tools):
     # Only registry packs verified to exist: an unknown pack fails the whole semgrep run.
     packs = {"python": "p/python", "django": "p/django", "flask": "p/flask", "react": "p/react",
              "next": "p/nextjs", "node": "p/nodejs", "node-api": "p/expressjs", "docker": "p/dockerfile",
-             "php": "p/php", "ios": "p/swift"}
-    configs = ["p/owasp-top-ten", *sorted({packs[s] for s in stacks if s in packs})]
+             "php": "p/php", "ios": "p/swift", "jvm": "p/java p/kotlin p/findsecbugs", "android": "p/java p/kotlin"}
+    configs = ["p/owasp-top-ten", *sorted({c for s in stacks if s in packs for c in packs[s].split()})]
     targets = ["."]
     if changed is not None:
         targets = sorted(changed)
@@ -831,9 +841,15 @@ def cmd_scan(a):
                 found += guarded("bandit", p["path"], tools, scan_bandit, root, p["path"], changed, tools)
             if "sca" in want:
                 found += guarded("pip-audit", p["path"], tools, scan_pip_audit, root, p["path"], tools)
+    flutter_dirs = [p["path"] for p in projects if "flutter" in p["stacks"]]
     for p in projects:
-        if "flutter" in p["stacks"] and "sast" in want and mode != "deps":
+        if "sast" not in want or mode == "deps":
+            continue
+        if "flutter" in p["stacks"]:
             found += guarded("flutter-checks", p["path"], tools, scan_flutter, root, p["path"], changed, tools)
+        elif {"android", "ios"} & set(p["stacks"]) and not any(  # a Flutter project's android/ and ios/ are already walked
+                d == "." or p["path"] == d or p["path"].startswith(d + "/") for d in flutter_dirs):
+            found += guarded("native-config-checks", p["path"], tools, scan_flutter, root, p["path"], changed, tools, False)
     npm_locks = sorted({lf for p in projects if "node" in p["stacks"] and not (root / p["path"] / "node_modules").is_dir()
                         for lf in [node_lockfile(root, p["path"])] if lf})
     if (stacks & OSV_STACKS or npm_locks) and "sca" in want:
@@ -1096,8 +1112,15 @@ def cmd_selftest(_):
             (root / d / f).write_text("")
         (root / "app").mkdir()
         (root / "app/pubspec.yaml").write_text("dependencies:\n  flutter:\n    sdk: flutter\n")
+        (root / "java-svc").mkdir()
+        (root / "java-svc/pom.xml").write_text("<project/>")
+        (root / "kt-svc").mkdir()
+        (root / "kt-svc/build.gradle.kts").write_text('plugins { kotlin("jvm") }')
+        (root / "droid").mkdir()
+        (root / "droid/build.gradle").write_text("plugins { id 'com.android.application' }")
+        (root / "swiftapp/App.xcodeproj").mkdir(parents=True)
         got = {p["path"]: p["stacks"] for p in detect(root)}
-        assert got == {"app": ["flutter"], "web": ["next", "node", "react", "react-native"], "spa": ["node", "react"], "flk": ["flask", "python"], "fapi": ["fastapi", "python"], "api": ["django", "python"], "cms": ["php"],
+        assert got == {"java-svc": ["jvm"], "kt-svc": ["jvm"], "droid": ["android"], "swiftapp": ["ios"], "app": ["flutter"], "web": ["next", "node", "react", "react-native"], "spa": ["node", "react"], "flk": ["flask", "python"], "fapi": ["fastapi", "python"], "api": ["django", "python"], "cms": ["php"],
                        "web/ios": ["ios"]}, got
 
     with tempfile.TemporaryDirectory() as t:  # Flutter checks: each rule fires on a bad sample, a safe sample stays clean
@@ -1132,6 +1155,19 @@ def cmd_selftest(_):
         assert not [f for f in got if f["file"] in ("lib/ok.dart", "android/app/src/debug/AndroidManifest.xml")], got
         assert any(f["title"].startswith("pubspec.lock") for f in got) and not any("global error handler" in f["title"] for f in got)
 
+    with tempfile.TemporaryDirectory() as t:  # native Android / iOS config rules (no Dart, no pubspec finding)
+        nr = Path(t)
+        (nr / "app/src/main/res/xml").mkdir(parents=True)
+        (nr / "app/src/main/AndroidManifest.xml").write_text('<application android:usesCleartextTraffic="true">')
+        (nr / "app/src/main/res/xml/network_security_config.xml").write_text('<base-config cleartextTrafficPermitted="true"/>')
+        (nr / "lib").mkdir()
+        (nr / "lib/x.dart").write_text("var u = 'http://api.example.com';")
+        tl = []
+        got = scan_flutter(nr, ".", None, tl, False)
+        titles = {f["title"] for f in got}
+        assert titles == {"Android allows cleartext HTTP", "Network security config allows cleartext HTTP"}, titles
+        assert tl[0]["tool"] == "native-config-checks" and all(f["source"] == "native-config-checks" for f in got)
+
     osv = {"results": [{"source": {"path": "/r/php/composer.lock"}, "packages": [
         {"package": {"name": "guzzlehttp/guzzle", "version": "7.4.0", "ecosystem": "Packagist"},
          "groups": [{"max_severity": "7.7"}, {"max_severity": "9.1"}],
@@ -1143,6 +1179,7 @@ def cmd_selftest(_):
     (f,) = norm_osv(osv, "/r")
     assert (f["severity"], f["file"]) == ("critical", "php/composer.lock") and "to 7.4.5 or later" in f["fix"], f
     assert "php/composer.lock" in f["fix"] and "CVE-2022-1" in f["detail"] and "(2 advisories)" in f["title"], f
+    assert MANIFESTS.search("svc/pom.xml") and MANIFESTS.search("app/gradle.lockfile") and not MANIFESTS.search("app/build.gradle")
     assert MANIFESTS.search("cms/composer.lock") and MANIFESTS.search("ios/App/Podfile.lock")
     npm = {"results": [{"source": {"path": "/r/web/package-lock.json"}, "packages": [osv["results"][0]["packages"][1]]}]}
     assert norm_osv(npm, "/r") == [] and norm_osv(npm, "/r", {"web/package-lock.json"})[0]["rule"] == "left-pad"

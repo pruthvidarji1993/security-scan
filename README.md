@@ -6,7 +6,7 @@ One command that checks your project for security problems and gives you a repor
 or send to a client.
 
 It works out what your project is built with (Next.js, React, Node API, Django, Flask, FastAPI,
-PHP/Laravel, React Native, Flutter, Docker), runs the right security tools, and can then have Claude read
+PHP/Laravel, React Native, Flutter, native Android, Java/Kotlin services, native iOS, Docker), runs the right security tools, and can then have Claude read
 your code for the problems tools usually miss: users seeing other users' data, missing login
 checks, forged tokens and similar flaws. You do not set anything up per project.
 
@@ -55,7 +55,7 @@ Claude reviewed code) and a note that scan history was saved. The report opens i
 In a terminal, the scan asks three questions. Type numbers separated by commas, `a` for all, `n`
 for none.
 
-1. **Scanners** (free): SAST (semgrep, bandit, Flutter checks), SCA (pip-audit, npm audit,
+1. **Scanners** (free): SAST (semgrep, bandit, Flutter and Android/iOS config checks), SCA (pip-audit, npm audit,
    osv-scanner, supply-chain checks), Secret scanning (gitleaks). Enter = all three.
 2. **AI code review by area** (uses tokens): Authentication, Authorization, Data security,
    Endpoint, Confidentiality, Key management. Enter or `n` = no Claude review.
@@ -121,6 +121,8 @@ The scanners are free. Only the Claude review costs tokens.
 |---|---|
 | Scanners | Dangerous code patterns, passwords and keys committed to git (including old commits), libraries with known vulnerabilities, risky dependency setups (no version, installed from a URL, no lockfile) |
 | Flutter apps | Tokens in SharedPreferences, disabled TLS checks, hardcoded keys, weak crypto, unsafe SQL and WebViews, secrets in logs, debuggable or backup-enabled Android builds, iOS App Transport Security off, release builds signed with the debug key |
+| Android and iOS projects | Debuggable or backup-enabled builds, cleartext HTTP (manifest and network security config), iOS App Transport Security off, release builds signed with the debug key; Java/Kotlin/Swift code rules via semgrep |
+| Java / Kotlin services | Injection, weak crypto, unsafe deserialization and XXE (semgrep with findsecbugs), vulnerable Maven libraries from `pom.xml`. Gradle projects need a `gradle.lockfile` (`./gradlew dependencies --write-locks`) |
 | Claude code review | Users reaching other users' data, admin pages without login checks, unverified tokens, injection, weak password storage, missing rate limits, unsafe uploads, risky deploy settings |
 
 On a fresh clone, vulnerable npm libraries are still found from the lockfile, but some JavaScript

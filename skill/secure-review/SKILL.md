@@ -1,6 +1,6 @@
 ---
 name: secure-review
-description: Standalone security review for any repository. Detects the stack (Next.js, React, Node API, Python with Django/Flask/FastAPI, PHP, React Native, Flutter, Docker), installs pinned scanners on first use, runs them, adds an AI review of what scanners cannot see (access control, IDOR, mass assignment, session, SSRF, CSRF, file upload, injection, migrations, N+1, API versioning, platform risks), verifies every finding, and writes a developer findings list plus a self-contained HTML client report mapped to OWASP Top 10. Run manually with /secure-review [diff|full|deps] [--base <ref>].
+description: Standalone security review for any repository. Detects the stack (Next.js, React, Node API, Python with Django/Flask/FastAPI, PHP, React Native, Flutter, native Android, Java/Kotlin services, native iOS, Docker), installs pinned scanners on first use, runs them, adds an AI review of what scanners cannot see (access control, IDOR, mass assignment, session, SSRF, CSRF, file upload, injection, migrations, N+1, API versioning, platform risks), verifies every finding, and writes a developer findings list plus a self-contained HTML client report mapped to OWASP Top 10. Run manually with /secure-review [diff|full|deps] [--base <ref>].
 argument-hint: '[diff|full|deps] [--base <ref>]'
 disable-model-invocation: true
 ---
@@ -30,7 +30,7 @@ Arguments: `$ARGUMENTS`
   is 8.19+, else the release binary (SHA-256 checked against the release
   checksums), else `brew install gitleaks` when GitHub downloads are blocked;
   osv-scanner the same way, only when a PHP (`composer.lock`) or iOS
-  CocoaPods project is detected, or a JS project has a lockfile but no `node_modules`. `web-secure-verification`
+  CocoaPods, Maven or Gradle project is detected, or a JS project has a lockfile but no `node_modules`. `web-secure-verification`
   runs through `npx` at a pinned version. `supply-chain` is built in (no install): it flags
   unpinned or URL dependencies, a missing lockfile, install-time scripts and pip
   `--extra-index-url`. Nothing is added to the project's `package.json`, requirements or lockfiles.
@@ -78,6 +78,8 @@ file):
 | `fastapi`                                | `references/fastapi.md`          |
 | `react-native`, `ios` | `references/mobile-desktop.md` |
 | `flutter`                                | `references/flutter.md`          |
+| `android` (native Android, also `android/` of React Native and Flutter) | `references/android.md` |
+| `jvm` (Java / Kotlin service)            | `references/jvm.md`              |
 | `php`                                    | `references/php.md`              |
 
 No stack detected, or a stack not listed: still apply `general.md` - semgrep's
