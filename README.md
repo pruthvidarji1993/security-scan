@@ -10,6 +10,19 @@ PHP/Laravel, React Native, Flutter, native Android, Java/Kotlin services, native
 your code for the problems tools usually miss: users seeing other users' data, missing login
 checks, forged tokens and similar flaws. You do not set anything up per project.
 
+## What gets scanned
+
+It picks the right checks for your project by itself. You do not choose a platform.
+
+| Your project | Security standard used in the report | What it looks at |
+|---|---|---|
+| Web app or API (Next.js, React, Node, Django, Flask, FastAPI, PHP/Laravel, Java/Kotlin services) | **OWASP Top 10 (2021)** | Injection, broken login and access control, weak crypto, misconfiguration, vulnerable libraries |
+| Mobile app (Flutter, React Native, Android, iOS) | **OWASP Top 10 + OWASP Mobile Top 10 (2024)**: a second table, M1 to M10 | Insecure storage, cleartext HTTP, debuggable builds, hardcoded keys, weak crypto, risky libraries, and **rooted-device / jailbreak detection** (M7) |
+| Any project | Secrets and dependencies | Passwords and keys in code and git history, libraries with known vulnerabilities, risky dependency setups |
+| Any project (optional, uses Claude tokens) | Claude code review | What tools miss: users seeing other users' data, missing login checks, forged tokens |
+
+The mobile table lists **M1 Improper Credential Usage, M2 Supply Chain, M3 Insecure Authentication / Authorization, M4 Input / Output Validation, M5 Insecure Communication, M6 Privacy Controls, M7 Binary Protections (root / jailbreak, obfuscation), M8 Misconfiguration, M9 Insecure Data Storage, M10 Insufficient Cryptography**. A web-only project does not get it.
+
 ## Quick start
 
 **1. You need:** `python3` 3.10+, `git`, and the `claude` CLI logged in. Without `claude` it
