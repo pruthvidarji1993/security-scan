@@ -146,17 +146,32 @@ with it.
   },
   "verdicts": { "F003": { "status": "confirmed", "severity": "high", "note": "Reachable from POST /api/upload without auth", "title": "optional: plain-English title", "fix": "optional: concrete fix" } },
   "rules": { "semgrep:<check_id>": { "status": "false-positive", "note": "Only used on constant strings" } },
+  "routes": [
+    { "method": "GET", "path": "/api/orders/:id", "file": "src/app/api/orders/[id]/route.ts", "line": 5, "auth": "session", "note": "no ownership check (see idor)" },
+    { "method": "POST", "path": "/api/contact", "file": "src/app/api/contact/route.ts", "line": 3, "auth": "none" }
+  ],
   "reviewed": ["src/app/api/orders/[id]/route.ts"],
   "added": [
     { "rule": "idor", "severity": "critical", "title": "Any user can read any order",
       "file": "src/app/api/orders/[id]/route.ts", "line": 12, "owasp": "A01", "cwe": "CWE-639",
       "detail": "GET loads the order by id without checking it belongs to the session user.",
+      "trace": "params.id (route.ts:8) -> db.order.findUnique({id}) (route.ts:12) -> JSON response; no userId filter",
+      "exploit": "GET /api/orders/1002 with user A's session cookie returns user B's order",
       "fix": "Filter the query by session.userId and return 404 otherwise." }
   ]
 }
 ```
 
-A verdict may set `title` and `fix` when the scanner's raw wording is unclear or has no fix.
+**Pentest-style evidence (static, nothing is run).** For every critical and high finding, and every
+injection, SSRF or access-control finding, set `trace` (entry point -> each hop -> sink, with
+`file:line`) and `exploit` (the one request a tester would send; no real secrets, no destructive
+payload). A finding with no traceable path stays a `suspicion`. List **every** route you found in
+`routes` with its auth level (`none`, `session`, `role:<name>`, `api-key`); the report marks write
+routes with `auth: none`. Check the auth and session items in `general.md` against the code and name
+the file:line (or report the control as missing). This is code review: the report states that no
+runtime testing was done.
+
+A verdict may set `title`, `fix`, `trace` and `exploit` when the scanner's raw wording is unclear or has no fix.
 `status` is `confirmed`, `suspicion` or `false-positive`; findings with no
 verdict show as `unverified`. Rule keys are `<source>:<rule>` exactly as in
 `scan.json`. `added` holds the AI review's verified findings; `owasp` is the

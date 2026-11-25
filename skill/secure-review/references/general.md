@@ -26,6 +26,15 @@ Red flags. Each needs a concrete exploit before it is a finding.
 - JWT: `alg: none` accepted, signature not verified (`decode` instead of
   `verify`), no expiry, secret hardcoded or weak.
 - Session not invalidated on logout or password change.
+- Code-level pentest checks, each answered from the code with a `file:line`:
+  JWT verify call pins `algorithms` (not read from the token header) and checks
+  `exp`/`aud`/`iss`; secret comes from env, is long, and differs per environment;
+  login, OTP, reset and signup routes each pass through a rate-limit or lockout
+  middleware (name it, or report it missing); reset/OTP tokens are random,
+  hashed at rest, single-use and expire; password compare is constant-time and
+  login errors do not reveal which of user/password was wrong; refresh tokens
+  rotate and are revoked on logout; session id is regenerated at login; cookie
+  flags are set in code, not left to defaults.
 - Bearer tokens or refresh tokens in `localStorage` / `sessionStorage` (any XSS
   steals them); cookies missing `HttpOnly`, `Secure`, `SameSite`.
 
@@ -88,7 +97,8 @@ Red flags. Each needs a concrete exploit before it is a finding.
 ## Routes, API versioning and response contract
 
 - Inventory every route file/controller and confirm each route has
-  authentication and authorization; look for forgotten debug, test or admin
+  authentication and authorization; record each one in `routes` of
+  `review.json` (method, path, file:line, auth level); look for forgotten debug, test or admin
   routes and catch-all handlers.
 - Versioning: public API with no version, or an old version still mounted
   without the fixes (auth, validation, rate limits) the new one has.

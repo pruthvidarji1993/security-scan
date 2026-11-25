@@ -991,7 +991,7 @@ def merge(scan, review):
         f = {**f, "status": v.get("status", f.get("status", "unverified")), "note": v.get("note", f.get("note", ""))}
         if v.get("severity") in SEVERITIES:
             f["severity"] = v["severity"]
-        f.update({k: v[k] for k in ("title", "fix") if v.get(k)})  # readable wording for raw scanner output
+        f.update({k: v[k] for k in ("title", "fix", "trace", "exploit") if v.get(k)})  # readable wording for raw scanner output
         findings.append(f)
     findings.sort(key=lambda f: (SEVERITIES.index(f["severity"]), f.get("file") or "", f.get("line") or 0))
     return findings
@@ -1058,9 +1058,20 @@ def render(scan, review, findings):
                 f"<span class='status st-{e(f['status'])}'>{e(f['status'])}</span></header>{where}{sub}"
                 f"{'<p>' + e(f['detail']) + '</p>' if f.get('detail') and len(g) == 1 else ''}"
                 f"{'<p><b>Reviewer:</b> ' + e(f['note']) + '</p>' if f.get('note') else ''}"
+                f"{'<p><b>Attack path:</b> ' + e(f['trace']) + '</p>' if f.get('trace') and len(g) == 1 else ''}"
+                f"{'<p><b>Example request:</b> <code>' + e(f['exploit']) + '</code></p>' if f.get('exploit') and len(g) == 1 else ''}"
                 f"{'<p><b>Fix:</b> ' + e(f['fix']) + '</p>' if f.get('fix') else ''}</article>")
         return "".join(out) or "<p class='muted'>None.</p>"
 
+    routes = review.get("routes") or []
+    open_write = lambda r: r.get("auth", "none") == "none" and r.get("method", "GET").upper() not in ("GET", "HEAD", "OPTIONS")
+    route_html = ("<h2>Route inventory</h2><p class='muted'>" + f"{len(routes)} route(s) found; {sum(map(open_write, routes))} "
+                  "write route(s) with no authentication (marked). A route not listed here was not found by the review.</p>"
+                  "<div class='tablewrap'><table><tr><th>Route</th><th>Auth</th><th>Where</th><th>Note</th></tr>" + "".join(
+                      f"<tr><td><b>{e(r.get('method', '?'))}</b> {e(r.get('path', ''))}</td>"
+                      f"<td class='{'st-failed' if open_write(r) else ''}'>{e(r.get('auth', 'none'))}</td>"
+                      f"<td><code>{e(r.get('file', ''))}{':' + e(r['line']) if r.get('line') else ''}</code></td><td>{e(r.get('note', ''))}</td></tr>"
+                      for r in routes) + "</table></div>") if routes else ""
     roadmap = [("Fix before release", ["critical", "high"]), ("Next sprint", ["medium"]), ("Backlog", ["low", "info"])]
     road = "".join(f"<li><b>{label}</b> - {sum(f['severity'] in sevs for f in security)} finding(s)</li>"
                    for label, sevs in roadmap)
@@ -1094,11 +1105,13 @@ main{{max-width:960px;margin:0 auto;padding:32px 16px 64px}}h1{{margin:0 0 4px;f
 <h2>OWASP Top 10 (2021) coverage</h2><div class="tablewrap"><table><tr><th>ID</th><th>Category</th><th>Findings</th></tr>{owasp_rows}</table></div>
 <p class="muted">{unmapped} finding(s) not mapped to a category. A category with no findings was checked but is not proven secure; see the checks below.</p>
 {mobile_html}
+{route_html}
 <h2>Findings</h2>{cards(security)}
 <h2>Compliance and quality</h2>{cards(other)}
 <h2>Checks run</h2><div class="tablewrap"><table><tr><th>Tool</th><th>Project</th><th>Status</th><th>Raw</th><th>Notes</th></tr>{tool_rows}
 <tr><td>AI code review</td><td>.</td><td class="st-{'ran' if review else 'skipped'}">{'ran' if review else 'skipped'}</td><td>{len(review.get('added', []))}</td><td>{'Access control, session, injection, SSRF/CSRF, platform checks the scanners cannot see' if review else 'Did not run (disabled, no source code in scope, or it failed). Access control, CSRF, session and SSRF were NOT checked: scanners cannot see them.'}</td></tr></table></div>
 <h2>Scope and limitations</h2>{paras(summary.get('scope'))}{paras(summary.get('limitations'))}
+<p class="muted">Static code review: the application was not run, so nothing here was tested against a live system (no runtime or network testing).</p>
 <p class="muted">{fp} scanner result(s) were reviewed and dismissed as false positives.{f" {meta['outOfScope']} pre-existing result(s) outside the changed files are excluded." if meta['outOfScope'] else ''}
 Unverified findings were not individually confirmed by a reviewer.</p>
 </main></body></html>"""
@@ -1355,6 +1368,9 @@ def cmd_selftest(_):
     page = render(scan, review, merged)
     assert "<script>alert" not in page and "&lt;script&gt;" in page and "Overall risk: Critical" in page
     rep = [{**finding("semgrep", "xss", "high", "XSS"), "file": f"a{i}.js", "line": i, "id": f"F{i}", "status": "confirmed"} for i in (1, 2)]
+    ex = render(scan, {"routes": [{"method": "POST", "path": "/api/x", "auth": "none", "file": "r.ts", "line": 4}]},
+                [{**merged[0], "trace": "req.body.id -> db.query", "exploit": "GET /api/orders/2"}])
+    assert "Route inventory" in ex and "1 write route(s) with no authentication" in ex and "Attack path" in ex and "GET /api/orders/2" in ex
     grouped = render(scan, {}, rep)
     assert grouped.count("<article") == 1 and "2 locations" in grouped and "a2.js:2" in grouped
     assert "NOT checked" in grouped and "not checked (AI review did not run)" in grouped
