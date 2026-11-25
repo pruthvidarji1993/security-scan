@@ -1037,12 +1037,26 @@ def merge(scan, review):
     return findings
 
 
-def rating(shown):
+SERVER_STACKS = {"node-api", "next", "django", "flask", "fastapi", "php", "jvm"}  # stacks that expose routes
+
+
+def coverage_gaps(meta, review):
+    """Why a clean-looking report must not be read as 'secure': what the review did not cover."""
+    if not review:
+        return ["AI code review did not run, so this report is automated rules only. Access control, IDOR, CSRF, session and SSRF "
+                "flaws were not reviewed, and scanners miss most of them. Do not read the absence of findings as 'secure'."]
+    if meta["mode"] != "deps" and SERVER_STACKS & set(meta["stacks"]) and not review.get("routes"):
+        return ["The review gave no route inventory for a project that serves routes, so which endpoints lack authentication "
+                "or ownership checks was not established. Treat access control as unreviewed."]
+    return []
+
+
+def rating(shown, reviewed=True):
     sec = [f for f in shown if f.get("category", "security") == "security" and f["status"] == "confirmed"]
     for sev, label in (("critical", "Critical"), ("high", "High"), ("medium", "Moderate"), ("low", "Low")):
         if any(f["severity"] == sev for f in sec):
             return label
-    return "No confirmed issues"
+    return "No confirmed issues" if reviewed else "Not assessed"
 
 
 def logo_uri():
@@ -1069,7 +1083,8 @@ def render(scan, review, findings):
     shown = [f for f in findings if f["status"] != "false-positive"]
     security = [f for f in shown if f.get("category", "security") == "security"]
     other = [f for f in shown if f.get("category", "security") != "security"]
-    risk = rating(shown)
+    risk = rating(shown, bool(review))
+    gaps = "".join(f"<p>{e(g)}</p>" for g in coverage_gaps(meta, review))
     logo = logo_uri()
     scope_text = e(f"Changes against {meta['base']} ({len(meta['changedFiles'] or [])} files)" if meta["mode"] == "diff"
                    else "Whole repository" if meta["mode"] == "full" else "Dependencies only")
@@ -1209,6 +1224,7 @@ details{{margin:8px 0}}summary{{cursor:pointer}}.st-ran,.st-confirmed{{color:var
 <main>
 <section><div class="hero"><h2 style="margin:0">Project overview: {e(meta['project'])}{f" ({e(', '.join(meta['stacks']))})" if meta['stacks'] else ''}</h2><span class="risk r-{e(risk.split()[0])}">Overall risk: {e(risk)}</span></div>
 <div class="tablewrap"><table class="info">{info_rows}</table></div></section>
+{f'<section style="border-left:4px solid var(--high)"><h2>Coverage warning</h2>{gaps}</section>' if gaps else ''}
 <section><h2>Findings by severity</h2>
 <div class="tablewrap"><table><tr><th>Severity</th><th>Count</th><th>What it means</th><th>What is counted here</th></tr>{sev_rows}</table></div>
 <p class="muted">Counts exclude dismissed false positives and compliance/quality notes.</p></section>
@@ -1285,7 +1301,9 @@ def cmd_report(a):
     (d / "report.html").write_text(render(scan, review, findings), encoding="utf-8")
     shown = [f for f in findings if f["status"] in ("confirmed", "suspicion", "unverified")
              and f.get("category", "security") == "security"]
-    print(f"report: {d / 'report.html'}\noverall risk: {rating(findings)}")
+    print(f"report: {d / 'report.html'}\noverall risk: {rating(findings, bool(review))}")
+    for g in coverage_gaps(scan["meta"], review):
+        print(f"WARNING: {g}")
     for f in shown[:60]:
         loc = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else (f.get("file") or "whole project (no single file)")
         tag = "" if f["status"] == "confirmed" else f" ({f['status']})"
@@ -1492,6 +1510,11 @@ def cmd_selftest(_):
     grouped = render(scan, {}, rep)
     assert grouped.count("<article") == 1 and "2 locations" in grouped and "a2.js:2" in grouped
     assert "NOT checked" in grouped and "not checked (AI review did not run)" in grouped
+    assert "Coverage warning" in grouped and "Overall risk: Not assessed" in render(scan, {}, [])  # no review: never "No confirmed issues"
+    assert "Overall risk: No confirmed issues" in render(scan, {"summary": {}}, []) and "Coverage warning" not in render({**scan, "meta": {**scan["meta"], "stacks": ["python"]}}, {"summary": {}}, [])
+    srv = {**scan, "meta": {**scan["meta"], "stacks": ["node-api"]}}
+    assert "route inventory" in render(srv, {"summary": {}}, []) and "route inventory" not in render(srv, {"routes": [{"method": "GET", "path": "/", "auth": "none"}]}, [])
+    assert not coverage_gaps({**srv["meta"], "mode": "deps"}, {"summary": {}})
 
     (f,) = norm_bandit({"results": [{"filename": "s.py", "line_number": 3, "test_id": "B105", "issue_severity": "LOW",
                                      "issue_text": "Possible hardcoded password: 'hunter22'", "code": "PW = 'hunter22'"}]}, ".")
