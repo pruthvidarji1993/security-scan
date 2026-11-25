@@ -171,6 +171,11 @@ routes with `auth: none`. Check the auth and session items in `general.md` again
 the file:line (or report the control as missing). This is code review: the report states that no
 runtime testing was done.
 
+The report is branded (logo from `assets/logo.png`, embedded) and lists, in order: project overview, findings by
+severity, executive summary, OWASP coverage, route inventory, findings, checks run (why a tool was
+skipped and what it leaves unchecked), then a *Fix now* list (confirmed critical/high only, same-rule
+findings grouped). Give every verdict a short plain-English `title` and a concrete `fix` so that list reads well.
+
 A verdict may set `title`, `fix`, `trace` and `exploit` when the scanner's raw wording is unclear or has no fix.
 `status` is `confirmed`, `suspicion` or `false-positive`; findings with no
 verdict show as `unverified`. Rule keys are `<source>:<rule>` exactly as in

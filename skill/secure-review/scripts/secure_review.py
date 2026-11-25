@@ -6,6 +6,7 @@
   selftest check detection, normalisers, diff scoping and HTML escaping offline
 """
 import argparse
+import base64
 import datetime
 import hashlib
 import html
@@ -348,6 +349,39 @@ TOOL_DESC = {
     "mobile-resilience": "Checks a mobile app for rooted-device / jailbreak / tamper detection (OWASP Mobile M7).",
     "gitleaks": "Searches the code and its git history for passwords, API keys and tokens that were committed.",
     "python-tools": "Installs the Python-based scanners the first time they are needed.",
+}
+
+
+# Report: what each severity level means and what is counted at that level.
+SEVERITY_MEANING = {
+    "critical": ("Attackers can take over data, accounts or the server now, with little effort.",
+                 "Injection reachable without login, any-user-reads-any-record (IDOR), exposed live secrets, authentication bypass.",
+                 "Fix before release."),
+    "high": ("Serious weakness; exploitable under common conditions or with a normal account.",
+             "Missing authorization checks, forged or unverified tokens, SSRF, deprecated packages, known-exploited CVEs.",
+             "Fix before release."),
+    "medium": ("Real weakness that needs a specific condition, or weakens other defences.",
+               "Hardcoded credentials in code, missing CSRF or rate limits, risky settings, missing lockfile, vulnerable but unreachable libraries.",
+               "Fix in the next sprint."),
+    "low": ("Minor hardening gap with little direct impact.",
+            "Missing security headers, verbose errors, packages only behind a newer version, best-practice gaps.",
+            "Backlog; fix when touching that code."),
+}
+
+
+# What stays unchecked when the tool did not run, and how to get it back (shown in the report).
+SKIP_IMPACT = {
+    "supply-chain": "Unpinned or URL dependencies, a missing lockfile and install scripts are not checked. Needs a package.json or requirements file.",
+    "web-secure-verification": "JavaScript code patterns, keys leaked in code and npm audit/deprecated-package checks are not run. Review the project, install its dependencies, then re-run.",
+    "osv-scanner": "Known CVEs in locked dependency versions are not checked. Commit a lockfile (package-lock.json, composer.lock, Gradle/Maven lock), then re-run.",
+    "bandit": "Python code patterns (shell calls, weak hashing, hardcoded passwords) are not checked. Runs when Python files are in scope.",
+    "pip-audit": "Known CVEs in Python dependencies are not checked. Add a requirements.txt or pyproject.toml with versions.",
+    "semgrep": "Insecure code patterns (injection, unsafe file access, weak crypto) are not checked by rules. The AI review still reads the code.",
+    "gitleaks": "Secrets committed in code and git history are not searched. Install gitleaks 8.19+ or allow the download, then re-run.",
+    "python-tools": "bandit, pip-audit and semgrep did not install, so Python and rule-based checks did not run. Needs Python 3.10+ and network on first run.",
+    "flutter-checks": "Flutter insecure storage, disabled TLS checks and weak crypto are not checked.",
+    "native-config-checks": "Android manifest, network config, Info.plist and signing settings are not checked.",
+    "mobile-resilience": "Root / jailbreak / tamper detection (OWASP Mobile M7) is not checked.",
 }
 
 
@@ -964,8 +998,14 @@ def cmd_scan(a):
     found.sort(key=lambda f: (SEVERITIES.index(f["severity"]), f["file"] or "", f["line"] or 0))
     for n, f in enumerate(found, 1):
         f["id"] = f"F{n:03d}"
-    meta = {"project": root.name, "root": str(root), "date": datetime.datetime.now().isoformat(timespec="minutes"),
-            "mode": mode, "base": base, "changedFiles": sorted(changed) if changed is not None else None,
+    branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root)[1].strip() if is_git else ""
+    commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=root)[1].strip() if is_git else ""
+    meta = {"project": root.name, "root": str(root), "branch": branch, "commit": commit, "date": datetime.datetime.now().isoformat(timespec="minutes"),
+            "mode": mode, "base": base,
+            "options": {"mode": a.mode, "base": a.base or ("auto" if mode == "diff" and base else None),
+                        "types": "sast, sca, secrets (default)" if a.types is None else (a.types or "none"),
+                        "changed_from": bool(a.changed_from)},
+            "changedFiles": sorted(changed) if changed is not None else None,
             "projects": projects, "stacks": sorted(stacks), "outOfScope": out_of_scope, "notes": notes}
     (out / "scan.json").write_text(json.dumps({"meta": meta, "tools": tools, "findings": found}, indent=1))
     counts = {s: sum(f["severity"] == s for f in found) for s in SEVERITIES}
@@ -1005,6 +1045,24 @@ def rating(shown):
     return "No confirmed issues"
 
 
+def logo_uri():
+    f = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+    return "data:image/png;base64," + base64.b64encode(f.read_bytes()).decode() if f.is_file() else ""
+
+
+def scan_options(meta):
+    o = meta.get("options") or {}
+    if not o:
+        return f"mode: {meta['mode']}"
+    parts = [f"mode: {meta['mode']}" + (" (forced by --changed-from)" if o.get("changed_from") and o.get("mode") != "diff" else "")]
+    if meta["mode"] == "diff":
+        parts.append(f"base: {meta.get('base') or 'none found'}" + (" (auto-picked)" if o.get("base") == "auto" else " (--base)"))
+    parts.append(f"checks: {o.get('types')}")
+    if o.get("changed_from"):
+        parts.append("changed files given by caller")
+    return "; ".join(parts)
+
+
 def render(scan, review, findings):
     e = lambda s: html.escape(str(s if s is not None else ""))
     meta, summary = scan["meta"], review.get("summary", {})
@@ -1012,9 +1070,21 @@ def render(scan, review, findings):
     security = [f for f in shown if f.get("category", "security") == "security"]
     other = [f for f in shown if f.get("category", "security") != "security"]
     risk = rating(shown)
+    logo = logo_uri()
+    scope_text = e(f"Changes against {meta['base']} ({len(meta['changedFiles'] or [])} files)" if meta["mode"] == "diff"
+                   else "Whole repository" if meta["mode"] == "full" else "Dependencies only")
+    sev_rows = "".join(
+        f"<tr class='sevrow sev-{k}'><td><span class='pill sev-{k}'>{k}</span></td>"
+        f"<td class='count'>{sum(f['severity'] == k for f in security)}</td><td>{e(m)}</td><td>{e(c)}</td></tr>"
+        for k, (m, c, a) in SEVERITY_MEANING.items())
+    info_rows = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in (
+        ("Project", e(meta["project"])),
+        ("Tech stack", e(", ".join(meta["stacks"]) or "not detected")),
+        ("Branch reviewed", e((meta.get("branch") or "not a git repository") + (f" @ {meta['commit']}" if meta.get("commit") else ""))),
+        ("Scope", scope_text),
+        ("Scan options", e(scan_options(meta))),
+        ("Date", e(meta["date"]))))
     paras = lambda t: "".join(f"<p>{e(p)}</p>" for p in str(t or "").split("\n\n") if p.strip())
-    counts = "".join(f'<div class="tile sev-{s}"><b>{sum(f["severity"] == s for f in security)}</b>{s}</div>'
-                     for s in SEVERITIES[:4])
     owasp_rows = "".join(
         f"<tr><td>{k}</td><td>{v}</td><td>{n or ('-' if review or k not in AI_ONLY else 'not checked (AI review did not run)')}</td></tr>"
         for k, v in OWASP.items() for n in [sum(f.get("owasp") == k for f in security)])
@@ -1030,10 +1100,18 @@ def render(scan, review, findings):
                    f'jailbreak detection (M7).</p><div class="tablewrap"><table><tr><th>ID</th><th>Category</th><th>Findings</th></tr>{mobile_rows}</table></div>'
                    f'<p class="muted">{sum(mobile_category(f) is None for f in mobile_sec)} mobile finding(s) not mapped to a category. '
                    f'A category with no findings was checked but is not proven secure.</p>') if mroots else ""
+    def tool_note(t):
+        if t["status"] not in ("skipped", "failed"):
+            return e(t["note"])
+        return (f"<b>Why:</b> {e(t['note'] or 'no reason recorded')}<br><b>Not covered:</b> "
+                f"{e(SKIP_IMPACT.get(t['tool'], 'The checks this tool performs were not run.'))}")
     tool_rows = "".join(f"<tr><td>{e(t['tool'])}<br><small class='muted'>{e(TOOL_DESC.get(t['tool'], ''))}</small></td>"
                         f"<td>{e(t['project'])}</td>"
                         f"<td class='st-{e(t['status'])}'>{e(t['status'])}</td><td>{t['count']}</td>"
-                        f"<td>{e(t['note'])}</td></tr>" for t in scan["tools"])
+                        f"<td>{tool_note(t)}</td></tr>" for t in scan["tools"])
+    not_run = [t for t in scan["tools"] if t["status"] in ("skipped", "failed")]
+    not_run_html = (f"<p class='warn'><b>{len(not_run)} check(s) did not run</b> ({e(', '.join(sorted({t['tool'] for t in not_run})))}). "
+                    "Their areas are not proven secure; the reason and what is missing are in the table.</p>") if not_run else ""
     loc = lambda f: f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else (f.get("file") or "whole project (no single file)")
 
     def cards(items):
@@ -1047,11 +1125,11 @@ def render(scan, review, findings):
                      f"<p class='loc'><b>{len(g)} locations</b> · ")
             where += (f"{e(f['source'])} · {e(f.get('owasp') or 'unmapped')}{' · Mobile ' + mobile_category(f) if mobile_category(f) and in_mobile(f) else ''}"
                       f"{' · ' + e(f['cwe']) if f.get('cwe') else ''} · {e(f.get('id', ''))}</p>")
-            sub = "" if len(g) == 1 else "<ul>" + "".join(
+            sub = "" if len(g) == 1 else f"<details><summary>Show {len(g)} locations</summary><ul>" + "".join(
                 f"<li><code>{e(loc(x))}</code> <span class='muted'>{e(x.get('id', ''))}</span>"
                 f"{' - ' + e(x['note']) if x.get('note') and x['note'] != f.get('note') else ''}"
                 f"{'<br><small class=muted>' + e(x['detail'][:160]) + '</small>' if x.get('detail') and not x.get('line') else ''}</li>"
-                for x in g) + "</ul>"
+                for x in g) + "</ul></details>"
             out.append(
                 f"<article class='finding sev-{f['severity']}'><header><span class='sev'>{f['severity']}</span>"
                 f"<h4>{e(f['title'])}{f' ({len(g)})' if len(g) > 1 else ''}</h4>"
@@ -1072,48 +1150,82 @@ def render(scan, review, findings):
                       f"<td class='{'st-failed' if open_write(r) else ''}'>{e(r.get('auth', 'none'))}</td>"
                       f"<td><code>{e(r.get('file', ''))}{':' + e(r['line']) if r.get('line') else ''}</code></td><td>{e(r.get('note', ''))}</td></tr>"
                       for r in routes) + "</table></div>") if routes else ""
-    roadmap = [("Fix before release", ["critical", "high"]), ("Next sprint", ["medium"]), ("Backlog", ["low", "info"])]
-    road = "".join(f"<li><b>{label}</b> - {sum(f['severity'] in sevs for f in security)} finding(s)</li>"
-                   for label, sevs in roadmap)
+    def fix_now(items):
+        grouped = {}
+        for f in items:
+            if f.get("category", "security") == "security" and f["severity"] in ("critical", "high") and f["status"] == "confirmed":
+                grouped.setdefault(f.get("rule") or f["title"], []).append(f)
+        out = []
+        for g in grouped.values():
+            f, places = g[0], sorted({loc(x) for x in g})
+            d = f.get("detail") or ""
+            how = f.get("fix") or ("" if f["title"][:40] == d[:40] else d[:160])
+            out.append(f"<li><span class='pill sev-{f['severity']}'>{f['severity']}</span> <b>{e(f['title'].split('. ')[0][:110])}</b>"
+                       f"{' · ' + str(len(g)) + ' places' if len(g) > 1 else ''}"
+                       f"{'<br><small>' + e(how) + '</small>' if how else ''}"
+                       f"<br><small class='muted'><code>{e(', '.join(places[:4]))}</code>{' +' + str(len(places) - 4) + ' more' if len(places) > 4 else ''}</small></li>")
+        return "<ul class='todo'>" + "".join(out) + "</ul>" if out else "<p class='muted'>No confirmed critical or high findings.</p>"
+    triage_html = "<h2>Fix now</h2>" + fix_now(shown)
     fp = sum(f["status"] == "false-positive" for f in findings)
-    scope = (f"Changes against <code>{e(meta['base'])}</code> ({len(meta['changedFiles'] or [])} files)"
-             if meta["mode"] == "diff" else "Whole repository" if meta["mode"] == "full" else "Dependencies only")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Security Review - {e(meta['project'])}</title>
 <style>
-:root{{--bg:#fff;--fg:#1b1f24;--muted:#5b6470;--line:#d9dee4;--card:#f6f8fa;--crit:#b42318;--high:#c4320a;--med:#9a6700;--low:#3b6fb6;--ok:#1a7f37}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#0f1216;--fg:#e6e9ed;--muted:#9aa4af;--line:#2b323a;--card:#171b21;--crit:#ff7b72;--high:#ffa657;--med:#e3b341;--low:#79c0ff;--ok:#56d364}}}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}}
-main{{max-width:960px;margin:0 auto;padding:32px 16px 64px}}h1{{margin:0 0 4px;font-size:26px}}h2{{margin:40px 0 12px;font-size:19px;border-bottom:1px solid var(--line);padding-bottom:6px}}
-.muted,.loc{{color:var(--muted)}}.risk{{display:inline-block;margin:12px 0;padding:6px 14px;border-radius:6px;background:var(--card);border:1px solid var(--line);font-weight:600}}
-.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}}.tile{{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;text-transform:capitalize}}
-.tile b{{display:block;font-size:26px}}table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}}
-.tablewrap{{overflow-x:auto}}.finding{{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:6px;padding:12px 14px;margin:10px 0}}
+:root{{--bg:#f3f5f8;--panel:#fff;--fg:#17202b;--muted:#617080;--line:#e3e8ee;--card:#f8fafc;--crit:#c0262d;--high:#d9480f;--med:#b7791f;--low:#2b6cb0;--ok:#1a7f37;--accent:#2f6fed;
+--crit-bg:#fdeceb;--high-bg:#fff1e8;--med-bg:#fff8e6;--low-bg:#ebf3fd}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#0d1117;--panel:#161b22;--fg:#e6edf3;--muted:#8b98a7;--line:#2a313a;--card:#1c222b;--crit:#ff7b72;--high:#ffa657;--med:#e3b341;--low:#79c0ff;--ok:#56d364;
+--crit-bg:#2d1618;--high-bg:#2d2012;--med-bg:#2a2410;--low-bg:#12233a}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}}
+.top{{background:#000;color:#fff}}.top>div{{max-width:1040px;margin:0 auto;padding:20px 24px;display:flex;align-items:center;gap:24px}}.top .btn{{margin-left:auto;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:9px 16px;font:600 14px inherit;font-family:inherit;cursor:pointer}}.top .btn:hover{{filter:brightness(1.1)}}
+.top img{{height:76px;display:block}}.top h1{{margin:0;font-size:24px;font-weight:650;letter-spacing:.2px}}.top p{{margin:2px 0 0;color:#9fb0c3;font-size:13px}}
+.top .t{{border-left:1px solid #2a2f36;padding-left:20px}}
+main{{max-width:1040px;margin:0 auto;padding:24px 24px 64px}}
+section{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}}
+h2{{margin:0 0 14px;font-size:13px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700}}
+.muted,.loc{{color:var(--muted)}}.hero{{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}}
+.risk{{padding:6px 16px;border-radius:999px;font-weight:700;border:1px solid var(--line);background:var(--card)}}
+.risk.r-Critical{{color:var(--crit);background:var(--crit-bg);border-color:var(--crit)}}.risk.r-High{{color:var(--high);background:var(--high-bg);border-color:var(--high)}}
+.risk.r-Moderate{{color:var(--med);background:var(--med-bg);border-color:var(--med)}}.risk.r-Low{{color:var(--low);background:var(--low-bg);border-color:var(--low)}}
+table{{width:100%;border-collapse:collapse;font-size:14px}}th{{text-align:left;padding:8px 10px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--line)}}
+td{{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}}tr:last-child td{{border-bottom:0}}.tablewrap{{overflow-x:auto}}
+table.info th{{width:150px;text-transform:none;letter-spacing:0;font-size:14px;border-bottom:0}}
+.pill{{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}}
+.pill.sev-critical{{background:var(--crit);color:#fff}}.pill.sev-high{{background:var(--high);color:#fff}}.pill.sev-medium{{background:var(--med);color:#fff}}.pill.sev-low,.pill.sev-info{{background:var(--low);color:#fff}}
+.sevrow.sev-critical{{background:var(--crit-bg)}}.sevrow.sev-high{{background:var(--high-bg)}}.sevrow.sev-medium{{background:var(--med-bg)}}.sevrow.sev-low{{background:var(--low-bg)}}
+.sevrow td:first-child{{border-left:4px solid}}.sevrow.sev-critical td:first-child{{border-color:var(--crit)}}.sevrow.sev-high td:first-child{{border-color:var(--high)}}
+.sevrow.sev-medium td:first-child{{border-color:var(--med)}}.sevrow.sev-low td:first-child{{border-color:var(--low)}}.count{{font-size:20px;font-weight:700;width:70px}}
+.finding{{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:8px;padding:12px 16px;margin:12px 0}}
 .finding header{{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}}.finding h4{{margin:0;flex:1;font-size:15px}}.finding p{{margin:6px 0;overflow-wrap:anywhere}}
 .sev{{text-transform:uppercase;font-size:12px;font-weight:700}}.status{{font-size:12px;color:var(--muted)}}
-.sev-critical{{border-left-color:var(--crit)}}.sev-critical .sev,.tile.sev-critical b{{color:var(--crit)}}.sev-high{{border-left-color:var(--high)}}.sev-high .sev,.tile.sev-high b{{color:var(--high)}}
-.sev-medium{{border-left-color:var(--med)}}.sev-medium .sev,.tile.sev-medium b{{color:var(--med)}}.sev-low,.sev-info{{border-left-color:var(--low)}}.sev-low .sev,.tile.sev-low b{{color:var(--low)}}
-.st-ran,.st-confirmed{{color:var(--ok)}}.st-failed{{color:var(--crit)}}code{{font-size:13px}}
-@media print{{body{{background:#fff;color:#000}}.finding{{break-inside:avoid}}}}
-</style></head><body><main>
-<h1>Security Review: {e(meta['project'])}</h1>
-<p class="muted">{e(meta['date'])} · Scope: {scope} · Stack: {e(', '.join(meta['stacks']) or 'not detected')}</p>
-<div class="risk">Overall risk: {e(risk)}</div>
-<h2>Executive summary</h2>{paras(summary.get('executive')) or '<p class="muted">Not written.</p>'}
-<div class="tiles">{counts}</div>
-<h2>Remediation roadmap</h2><ul>{road}</ul>
-<h2>OWASP Top 10 (2021) coverage</h2><div class="tablewrap"><table><tr><th>ID</th><th>Category</th><th>Findings</th></tr>{owasp_rows}</table></div>
-<p class="muted">{unmapped} finding(s) not mapped to a category. A category with no findings was checked but is not proven secure; see the checks below.</p>
-{mobile_html}
-{route_html}
-<h2>Findings</h2>{cards(security)}
-<h2>Compliance and quality</h2>{cards(other)}
-<h2>Checks run</h2><div class="tablewrap"><table><tr><th>Tool</th><th>Project</th><th>Status</th><th>Raw</th><th>Notes</th></tr>{tool_rows}
-<tr><td>AI code review</td><td>.</td><td class="st-{'ran' if review else 'skipped'}">{'ran' if review else 'skipped'}</td><td>{len(review.get('added', []))}</td><td>{'Access control, session, injection, SSRF/CSRF, platform checks the scanners cannot see' if review else 'Did not run (disabled, no source code in scope, or it failed). Access control, CSRF, session and SSRF were NOT checked: scanners cannot see them.'}</td></tr></table></div>
-<h2>Scope and limitations</h2>{paras(summary.get('scope'))}{paras(summary.get('limitations'))}
+.finding.sev-critical{{border-left-color:var(--crit)}}.finding.sev-critical .sev{{color:var(--crit)}}.finding.sev-high{{border-left-color:var(--high)}}.finding.sev-high .sev{{color:var(--high)}}
+.finding.sev-medium{{border-left-color:var(--med)}}.finding.sev-medium .sev{{color:var(--med)}}.finding.sev-low,.finding.sev-info{{border-left-color:var(--low)}}.finding.sev-low .sev{{color:var(--low)}}
+.st-skipped{{color:var(--med)}}.warn{{background:var(--med-bg);border:1px solid var(--med);border-radius:8px;padding:8px 12px}}
+.todo{{list-style:none;padding:0;margin:0}}.todo li{{padding:12px 0;border-bottom:1px solid var(--line)}}.todo li:last-child{{border-bottom:0}}
+details{{margin:8px 0}}summary{{cursor:pointer}}.st-ran,.st-confirmed{{color:var(--ok)}}.st-failed{{color:var(--crit)}}code{{font-size:13px}}
+@page{{size:A4;margin:12mm}}
+@media print{{:root{{--bg:#fff;--panel:#fff;--fg:#17202b;--muted:#617080;--line:#e3e8ee;--card:#f8fafc;--crit:#c0262d;--high:#d9480f;--med:#b7791f;--low:#2b6cb0;--ok:#1a7f37;--crit-bg:#fdeceb;--high-bg:#fff1e8;--med-bg:#fff8e6;--low-bg:#ebf3fd}}
+*{{-webkit-print-color-adjust:exact;print-color-adjust:exact}}.noprint{{display:none!important}}main{{padding:8px 0}}section{{box-shadow:none}}.finding,tr,li{{break-inside:avoid}}h2{{break-after:avoid}}}}
+</style></head><body>
+<header class="top"><div>{f'<img src="{logo}" alt="Zignuts Technolab">' if logo else ''}<span class="t"><h1>Code Security Review Report</h1><p><b>Prepared by: Zignuts Security Intelligence</b></p></span><button class="btn noprint" onclick="window.print()">Export as PDF</button></div></header>
+<main>
+<section><div class="hero"><h2 style="margin:0">Project overview: {e(meta['project'])}{f" ({e(', '.join(meta['stacks']))})" if meta['stacks'] else ''}</h2><span class="risk r-{e(risk.split()[0])}">Overall risk: {e(risk)}</span></div>
+<div class="tablewrap"><table class="info">{info_rows}</table></div></section>
+<section><h2>Findings by severity</h2>
+<div class="tablewrap"><table><tr><th>Severity</th><th>Count</th><th>What it means</th><th>What is counted here</th></tr>{sev_rows}</table></div>
+<p class="muted">Counts exclude dismissed false positives and compliance/quality notes.</p></section>
+<section><h2>Executive summary</h2>{paras(summary.get('executive')) or '<p class="muted">Not written.</p>'}</section>
+<section><h2>OWASP Top 10 (2021) coverage</h2><div class="tablewrap"><table><tr><th>ID</th><th>Category</th><th>Findings</th></tr>{owasp_rows}</table></div>
+<p class="muted">{unmapped} finding(s) not mapped to a category. A category with no findings was checked but is not proven secure; see the checks below.</p></section>
+{'<section>' + mobile_html + '</section>' if mobile_html else ''}
+{'<section>' + route_html + '</section>' if route_html else ''}
+<section><h2>Findings</h2>{cards(security)}</section>
+{'<section><h2>Compliance and quality</h2>' + cards(other) + '</section>' if other else ''}
+<section><h2>Checks run</h2>{not_run_html}<div class="tablewrap"><table><tr><th>Tool</th><th>Project</th><th>Status</th><th>Raw</th><th>Notes</th></tr>{tool_rows}
+<tr><td>AI code review</td><td>.</td><td class="st-{'ran' if review else 'skipped'}">{'ran' if review else 'skipped'}</td><td>{len(review.get('added', []))}</td><td>{'Access control, session, injection, SSRF/CSRF, platform checks the scanners cannot see' if review else 'Did not run (disabled, no source code in scope, or it failed). Access control, CSRF, session and SSRF were NOT checked: scanners cannot see them.'}</td></tr></table></div></section>
+<section>{triage_html}</section>
+<section><h2>Scope and limitations</h2>{paras(summary.get('scope'))}{paras(summary.get('limitations'))}
 <p class="muted">Static code review: the application was not run, so nothing here was tested against a live system (no runtime or network testing).</p>
 <p class="muted">{fp} scanner result(s) were reviewed and dismissed as false positives.{f" {meta['outOfScope']} pre-existing result(s) outside the changed files are excluded." if meta['outOfScope'] else ''}
-Unverified findings were not individually confirmed by a reviewer.</p>
+Unverified findings were not individually confirmed by a reviewer.</p></section>
 </main></body></html>"""
 
 
@@ -1371,6 +1483,12 @@ def cmd_selftest(_):
     ex = render(scan, {"routes": [{"method": "POST", "path": "/api/x", "auth": "none", "file": "r.ts", "line": 4}]},
                 [{**merged[0], "trace": "req.body.id -> db.query", "exploit": "GET /api/orders/2"}])
     assert "Route inventory" in ex and "1 write route(s) with no authentication" in ex and "Attack path" in ex and "GET /api/orders/2" in ex
+    assert "Branch reviewed" in page and "Tech stack" in page and "What it means" in page
+    assert "Scan options" in page and "mode: full" in page
+    assert "base: origin/x (--base)" in scan_options({"mode": "diff", "base": "origin/x", "options": {"mode": "diff", "base": "origin/x", "types": "sast"}})
+    assert "<h2>Fix now</h2>" in ex and "Fix soon" not in ex and "Action</th>" not in ex and "Code Security Review Report" in ex and "window.print()" in ex and "<b>Prepared by: Zignuts Security Intelligence</b>" in ex and "Project overview: " in ex and "data:image/png" in ex
+    skipped = render({**scan, "tools": [tool("osv-scanner", ".", "skipped", "no lockfile")]}, {}, [])
+    assert "Why:</b> no lockfile" in skipped and "Not covered:" in skipped and "1 check(s) did not run" in skipped
     grouped = render(scan, {}, rep)
     assert grouped.count("<article") == 1 and "2 locations" in grouped and "a2.js:2" in grouped
     assert "NOT checked" in grouped and "not checked (AI review did not run)" in grouped
