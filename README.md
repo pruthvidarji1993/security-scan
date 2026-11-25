@@ -31,11 +31,16 @@ still runs, but only the automatic tools, not the code review.
 **2. Install your project's dependencies** (`npm install`, `composer install`, `pod install`, `flutter pub get`).
 The scan never installs them for you, because install scripts can run any code.
 
-**3. Run this from inside your project:**
+### ▶️ 3. Run this command from inside your project
 
-```bash
-bash <(curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/pruthvidarji1993/security-scan/contents/run.sh)
-```
+> [!IMPORTANT]
+> **Open a terminal in your project folder, paste this one line, press Enter:**
+>
+> ```bash
+> bash <(curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/pruthvidarji1993/security-scan/contents/run.sh)
+> ```
+>
+> That is all. It detects your platform (web or mobile) and scans for the matching OWASP risks.
 
 To scan another folder, add its path at the end. Your project is never changed: nothing is
 added, edited or committed.
