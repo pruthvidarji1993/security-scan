@@ -1083,7 +1083,7 @@ def render(scan, review, findings):
         ("Branch reviewed", e((meta.get("branch") or "not a git repository") + (f" @ {meta['commit']}" if meta.get("commit") else ""))),
         ("Scope", scope_text),
         ("Scan options", e(scan_options(meta))),
-        ("Date", e(meta["date"]))))
+        ("Date", e(_fmt_date(meta["date"])))))
     paras = lambda t: "".join(f"<p>{e(p)}</p>" for p in str(t or "").split("\n\n") if p.strip())
     owasp_rows = "".join(
         f"<tr><td>{k}</td><td>{v}</td><td>{n or ('-' if review or k not in AI_ONLY else 'not checked (AI review did not run)')}</td></tr>"
@@ -1534,6 +1534,13 @@ def cmd_selftest(_):
                                        "extra": {"message": "m", "severity": "ERROR", "fix": "True"}}]})
     assert sg["fix"] == "", sg
     print("selftest ok")
+
+
+def _fmt_date(d):
+    try:
+        return datetime.datetime.fromisoformat(d).strftime("%d/%m/%Y %I:%M %p")
+    except (ValueError, TypeError):
+        return d
 
 
 def main():
