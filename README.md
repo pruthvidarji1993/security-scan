@@ -118,7 +118,7 @@ scanners plus a Claude review of authorization and key management.
 - **Scope** says how much code Claude read, e.g. "read 120 of 150 source files". Files it did
   not reach are listed and are read first on the next scan.
 
-The report is a single HTML file (light and dark mode, prints to PDF, safe to email).
+The report is a single HTML file (light and dark mode, an "Export as PDF" button, safe to email).
 [Download a sample](docs/sample-report.html).
 
 ![Sample security report](docs/sample-report.png)
