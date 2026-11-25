@@ -91,6 +91,10 @@ scanners plus a Claude review of authorization and key management.
 - **Confirmed**: Claude checked it and it is real. **Suspicion**: looks wrong but could not be
   proven. **Unverified**: found by a tool, not checked by Claude (for example with `--no-ai`, or when it
   is outside the AI areas you picked).
+- **OWASP Mobile Top 10** (mobile apps only): a second coverage table, M1-M10. A row with `-` was
+  checked and nothing was found; it is not proof the area is secure. Root / jailbreak detection is
+  M7. Client-side detection can be bypassed, so a missing check is rated Low, a hint to harden
+  apps that handle money, health or identity data.
 - **Checks table:** each tool has a one-line description of what it does. Look for `skipped` rows. Each one says what was not checked and why
   (usually a missing dependency or lockfile).
 - **Scope** says how much code Claude read, e.g. "read 120 of 150 source files". Files it did
@@ -123,6 +127,7 @@ The scanners are free. Only the Claude review costs tokens.
 | Flutter apps | Tokens in SharedPreferences, disabled TLS checks, hardcoded keys, weak crypto, unsafe SQL and WebViews, secrets in logs, debuggable or backup-enabled Android builds, iOS App Transport Security off, release builds signed with the debug key |
 | Android and iOS projects | Debuggable or backup-enabled builds, cleartext HTTP (manifest and network security config), iOS App Transport Security off, release builds signed with the debug key; Java/Kotlin/Swift code rules via semgrep |
 | Java / Kotlin services | Injection, weak crypto, unsafe deserialization and XXE (semgrep with findsecbugs), vulnerable Maven libraries from `pom.xml`. Gradle projects need a `gradle.lockfile` (`./gradlew dependencies --write-locks`) |
+| Mobile apps (OWASP Mobile Top 10) | For Flutter, React Native, Android and iOS projects the report adds an **OWASP Mobile Top 10 (2024)** table (M1-M10) next to the web Top 10, and tags each finding with its mobile category. Includes **rooted-device / jailbreak detection** (M7): the scan reports apps that have no root, jailbreak or tamper check, and Claude judges whether an existing check is real. Also covered: insecure storage, cleartext or user-CA network trust, debuggable builds, weak crypto, vulnerable libraries. Web-only projects do not get this table |
 | Claude code review | Users reaching other users' data, admin pages without login checks, unverified tokens, injection, weak password storage, missing rate limits, unsafe uploads, risky deploy settings |
 
 On a fresh clone, vulnerable npm libraries are still found from the lockfile, but some JavaScript

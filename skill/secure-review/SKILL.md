@@ -129,6 +129,10 @@ with it.
   fixes, or in the summary - even weak or placeholder ones like `secret123` or
   `dev`. Write "the hardcoded JWT secret in server.js:7", never the value.
   (The report step also redacts literals on flagged lines as a safety net.)
+- **Mobile apps**: check the OWASP Mobile Top 10 (2024) and MASVS-RESILIENCE. The `mobile-resilience`
+  scanner only reports when there is no root / jailbreak check at all; judge whether the check that
+  exists is real (see the checklists) and how sensitive the app is (payments, health, identity) before
+  calling its absence more than `low`.
 - Do not manufacture findings. "Nothing found in this area" is a valid result.
 
 ## 4. Write `<out>/review.json`
@@ -156,7 +160,9 @@ A verdict may set `title` and `fix` when the scanner's raw wording is unclear or
 `status` is `confirmed`, `suspicion` or `false-positive`; findings with no
 verdict show as `unverified`. Rule keys are `<source>:<rule>` exactly as in
 `scan.json`. `added` holds the AI review's verified findings; `owasp` is the
-2021 id (`A01`-`A10`). Privacy, licensing and other client-facing compliance
+2021 id (`A01`-`A10`). For a mobile project (`flutter`, `react-native`, `android`, `ios`) also set
+`"mobile"` to the OWASP Mobile Top 10 (2024) id (`M1`-`M10`); the report then shows a separate
+Mobile Top 10 table. Privacy, licensing and other client-facing compliance
 observations (see `general.md`) go in `added` with `"category": "compliance"`;
 the report lists them separately from code defects.
 

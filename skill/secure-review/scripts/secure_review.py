@@ -55,6 +55,25 @@ OWASP = {"A01": "Broken Access Control", "A02": "Cryptographic Failures", "A03":
          "A06": "Vulnerable and Outdated Components", "A07": "Identification and Authentication Failures",
          "A08": "Software and Data Integrity Failures", "A09": "Security Logging and Monitoring Failures",
          "A10": "Server-Side Request Forgery"}
+# OWASP Mobile Top 10 (2024). Shown for mobile projects only; root/jailbreak detection is M7.
+MOBILE_STACKS = {"flutter", "react-native", "android", "ios"}
+MOBILE = {"M1": "Improper Credential Usage", "M2": "Inadequate Supply Chain Security",
+          "M3": "Insecure Authentication / Authorization", "M4": "Insufficient Input / Output Validation",
+          "M5": "Insecure Communication", "M6": "Inadequate Privacy Controls",
+          "M7": "Insufficient Binary Protections (root / jailbreak detection, obfuscation, tamper checks)",
+          "M8": "Security Misconfiguration", "M9": "Insecure Data Storage", "M10": "Insufficient Cryptography"}
+MOBILE_AI_ONLY = {"M1", "M3", "M4", "M6"}  # scanners barely cover these; only the AI review reads the logic
+CWE_MOBILE = {259: "M1", 321: "M1", 798: "M1", 287: "M3", 306: "M3", 862: "M3", 863: "M3", 20: "M4", 78: "M4",
+              79: "M4", 89: "M4", 749: "M4", 295: "M5", 319: "M5", 359: "M6", 693: "M7", 919: "M7",
+              16: "M8", 209: "M8", 489: "M8", 926: "M8", 200: "M9", 312: "M9", 530: "M9", 532: "M9", 922: "M9",
+              326: "M10", 327: "M10", 328: "M10", 330: "M10", 338: "M10", 1104: "M2", 494: "M2"}
+# Any of these in the app means it has some root / jailbreak / tamper check (library or hand-written).
+RESILIENCE_RX = re.compile(r"(?i)jailbreak|jail[-_]?monkey|rootbeer|root[-_]?detect|isDeviceRooted|isRooted|"
+                           r"safe[_-]?device|freerasp|talsec|IOSSecuritySuite|PlayIntegrity|SafetyNet|AppAttest|"
+                           r"DCAppAttest|/Applications/Cydia\.app|cydia://|/system/(x?bin)/su\b")
+RESILIENCE_EXT = (".kt", ".java", ".swift", ".m", ".mm", ".dart", ".gradle", ".kts", ".yaml", ".json", ".js", ".jsx",
+                  ".ts", ".tsx", ".plist", "Podfile")
+
 CWE_OWASP = {22: "A01", 200: "A01", 284: "A01", 285: "A01", 352: "A01", 601: "A01", 639: "A01",
              295: "A02", 319: "A02", 326: "A02", 327: "A02", 328: "A02", 330: "A02", 338: "A02",
              20: "A03", 74: "A03", 77: "A03", 78: "A03", 79: "A03", 89: "A03", 94: "A03", 95: "A03",
@@ -326,6 +345,7 @@ TOOL_DESC = {
                "using security rules for your stack.",
     "flutter-checks": "Checks Flutter code and the Android/iOS settings for insecure storage, disabled TLS checks, weak crypto and debug builds.",
     "native-config-checks": "Checks Android and iOS settings (manifest, network config, Info.plist, signing) for debuggable builds, cleartext HTTP and the debug key.",
+    "mobile-resilience": "Checks a mobile app for rooted-device / jailbreak / tamper detection (OWASP Mobile M7).",
     "gitleaks": "Searches the code and its git history for passwords, API keys and tokens that were committed.",
     "python-tools": "Installs the Python-based scanners the first time they are needed.",
 }
@@ -667,6 +687,8 @@ FLUTTER_NATIVE = [  # (file regex, line/text regex, title, severity, owasp, cwe,
     (r"AndroidManifest\.xml$", r'usesCleartextTraffic="true"', "Android allows cleartext HTTP", "high", "A02", 319, "Remove usesCleartextTraffic"),
     (r"network_security_config[^/]*\.xml$", r'cleartextTrafficPermitted="true"', "Network security config allows cleartext HTTP", "high", "A02", 319,
      "Set cleartextTrafficPermitted to false"),
+    (r"network_security_config[^/]*\.xml$", r'<certificates\s+src="user"', "App trusts user-installed certificates", "medium", "A02", 295,
+     "Remove user CAs from release builds (allow them only in debug-overrides)"),
     (r"Info\.plist$", r"NSAllowsArbitraryLoads</key>\s*<true/>", "iOS App Transport Security disabled", "high", "A02", 319, "Remove NSAllowsArbitraryLoads"),
     (r"build\.gradle(\.kts)?$", r'signingConfig\s*=?\s*signingConfigs\.(getByName\("debug"\)|debug)', "Release build signed with the debug key", "medium", "A05", 321,
      "Create a release keystore and sign with it"),
@@ -718,6 +740,48 @@ def scan_flutter(root, proj, changed, tools, app=True):
                              rel_path(pdir / "pubspec.yaml", root), None, "Dependencies cannot be audited or reproduced", "Run `flutter pub get` and commit pubspec.lock", "A06"))
     tools.append(tool(name, proj, "ran", f"{dart} Dart files + Android/iOS config" if app else "Android/iOS config", len(found)))
     return found
+
+
+def mobile_category(f):
+    """OWASP Mobile Top 10 id for a finding: explicit (AI review) > CWE > any library finding is M2."""
+    if f.get("mobile") in MOBILE:
+        return f["mobile"]
+    m = re.search(r"\d+", str(f.get("cwe") or ""))
+    return CWE_MOBILE.get(int(m.group())) if m and int(m.group()) in CWE_MOBILE else ("M2" if f.get("owasp") == "A06" else None)
+
+
+def mobile_roots(projects):
+    """Top-most project paths with a mobile stack (a Flutter or React Native app already contains its ios/ and android/)."""
+    paths = sorted((p["path"] for p in projects if MOBILE_STACKS & set(p["stacks"])), key=len)
+    return [d for n, d in enumerate(paths) if not any(o == "." or d.startswith(o + "/") for o in paths[:n])]
+
+
+def scan_resilience(root, proj, changed, tools):
+    """M7: report an app that has no root / jailbreak / tamper check at all. Whole-project absence, so not run on a diff."""
+    name = "mobile-resilience"
+    pdir, seen = root / proj, 0
+    skip = SKIP_DIRS | {".dart_tool", "generated", "ephemeral"}
+    for dp, dirs, files in os.walk(pdir):
+        dirs[:] = [d for d in dirs if d not in skip and not d.startswith(".")]
+        for f in files:
+            path = Path(dp, f)
+            if not f.endswith(RESILIENCE_EXT) and f != "Podfile":
+                continue
+            try:
+                if path.stat().st_size > 2_000_000:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            seen += 1
+            if RESILIENCE_RX.search(text):
+                tools.append(tool(name, proj, "ran", "root / jailbreak detection found", 0))
+                return []
+    tools.append(tool(name, proj, "ran", f"{seen} files read, no root / jailbreak detection", 1))
+    return [finding(name, "no-root-jailbreak-detection", "low", "No root / jailbreak detection found", rel_path(pdir, root) if proj != "." else None, None,
+                    "No jailbreak, root or tamper check (e.g. RootBeer, Play Integrity, jail-monkey, freeRASP, IOSSecuritySuite) was found in the app code.",
+                    "For apps handling payments, health or identity data: detect rooted / jailbroken devices and tampering, and limit what the app does there. "
+                    "Treat it as one layer, never as the only protection; low-risk apps may accept this.", "A05", 693)]
 
 
 def scan_semgrep(root, stacks, changed, tools):
@@ -850,6 +914,9 @@ def cmd_scan(a):
         elif {"android", "ios"} & set(p["stacks"]) and not any(  # a Flutter project's android/ and ios/ are already walked
                 d == "." or p["path"] == d or p["path"].startswith(d + "/") for d in flutter_dirs):
             found += guarded("native-config-checks", p["path"], tools, scan_flutter, root, p["path"], changed, tools, False)
+    if "sast" in want and mode != "deps" and changed is None:
+        for d in mobile_roots(projects):
+            found += guarded("mobile-resilience", d, tools, scan_resilience, root, d, changed, tools)
     npm_locks = sorted({lf for p in projects if "node" in p["stacks"] and not (root / p["path"] / "node_modules").is_dir()
                         for lf in [node_lockfile(root, p["path"])] if lf})
     if (stacks & OSV_STACKS or npm_locks) and "sca" in want:
@@ -952,6 +1019,17 @@ def render(scan, review, findings):
         f"<tr><td>{k}</td><td>{v}</td><td>{n or ('-' if review or k not in AI_ONLY else 'not checked (AI review did not run)')}</td></tr>"
         for k, v in OWASP.items() for n in [sum(f.get("owasp") == k for f in security)])
     unmapped = sum(not f.get("owasp") for f in security)
+    mroots = mobile_roots(meta.get("projects", []))
+    in_mobile = lambda f: f.get("mobile") in MOBILE or any(
+        d == "." or (f.get("file") or "").startswith(d + "/") or f.get("file") == d for d in mroots)
+    mobile_sec = [f for f in security if in_mobile(f)]
+    mobile_rows = "".join(
+        f"<tr><td>{k}</td><td>{v}</td><td>{n or ('-' if review or k not in MOBILE_AI_ONLY else 'not checked (AI review did not run)')}</td></tr>"
+        for k, v in MOBILE.items() for n in [sum(mobile_category(f) == k for f in mobile_sec)])
+    mobile_html = (f'<h2>OWASP Mobile Top 10 (2024) coverage</h2><p class="muted">Mobile app detected. Includes rooted-device and '
+                   f'jailbreak detection (M7).</p><div class="tablewrap"><table><tr><th>ID</th><th>Category</th><th>Findings</th></tr>{mobile_rows}</table></div>'
+                   f'<p class="muted">{sum(mobile_category(f) is None for f in mobile_sec)} mobile finding(s) not mapped to a category. '
+                   f'A category with no findings was checked but is not proven secure.</p>') if mroots else ""
     tool_rows = "".join(f"<tr><td>{e(t['tool'])}<br><small class='muted'>{e(TOOL_DESC.get(t['tool'], ''))}</small></td>"
                         f"<td>{e(t['project'])}</td>"
                         f"<td class='st-{e(t['status'])}'>{e(t['status'])}</td><td>{t['count']}</td>"
@@ -967,7 +1045,7 @@ def render(scan, review, findings):
             f = g[0]
             where = (f"<p class='loc'><code>{e(loc(f))}</code> · " if len(g) == 1 else
                      f"<p class='loc'><b>{len(g)} locations</b> · ")
-            where += (f"{e(f['source'])} · {e(f.get('owasp') or 'unmapped')}"
+            where += (f"{e(f['source'])} · {e(f.get('owasp') or 'unmapped')}{' · Mobile ' + mobile_category(f) if mobile_category(f) and in_mobile(f) else ''}"
                       f"{' · ' + e(f['cwe']) if f.get('cwe') else ''} · {e(f.get('id', ''))}</p>")
             sub = "" if len(g) == 1 else "<ul>" + "".join(
                 f"<li><code>{e(loc(x))}</code> <span class='muted'>{e(x.get('id', ''))}</span>"
@@ -1015,6 +1093,7 @@ main{{max-width:960px;margin:0 auto;padding:32px 16px 64px}}h1{{margin:0 0 4px;f
 <h2>Remediation roadmap</h2><ul>{road}</ul>
 <h2>OWASP Top 10 (2021) coverage</h2><div class="tablewrap"><table><tr><th>ID</th><th>Category</th><th>Findings</th></tr>{owasp_rows}</table></div>
 <p class="muted">{unmapped} finding(s) not mapped to a category. A category with no findings was checked but is not proven secure; see the checks below.</p>
+{mobile_html}
 <h2>Findings</h2>{cards(security)}
 <h2>Compliance and quality</h2>{cards(other)}
 <h2>Checks run</h2><div class="tablewrap"><table><tr><th>Tool</th><th>Project</th><th>Status</th><th>Raw</th><th>Notes</th></tr>{tool_rows}
@@ -1167,6 +1246,31 @@ def cmd_selftest(_):
         titles = {f["title"] for f in got}
         assert titles == {"Android allows cleartext HTTP", "Network security config allows cleartext HTTP"}, titles
         assert tl[0]["tool"] == "native-config-checks" and all(f["source"] == "native-config-checks" for f in got)
+
+    with tempfile.TemporaryDirectory() as t:  # OWASP Mobile Top 10 + root / jailbreak detection
+        mr = Path(t)
+        (mr / "app/ios").mkdir(parents=True)
+        (mr / "app/package.json").write_text('{"dependencies":{"react-native":"0.76"}}')
+        (mr / "app/App.js").write_text("export default 1")
+        (mr / "api").mkdir()
+        (mr / "api/requirements.txt").write_text("Django==4.2\n")
+        (mr / "app/ios/Podfile").write_text("")
+        projs = detect(mr)
+        assert mobile_roots(projs) == ["app"], mobile_roots(projs)  # app/ios is inside the app; api is not mobile
+        tl = []
+        got = scan_resilience(mr, "app", None, tl)
+        assert [f["rule"] for f in got] == ["no-root-jailbreak-detection"] and got[0]["owasp"] == "A05", got
+        assert mobile_category(got[0]) == "M7"
+        (mr / "app/App.js").write_text("import JailMonkey from 'jail-monkey'")
+        assert scan_resilience(mr, "app", None, []) == []
+        assert mobile_category({"cwe": 295}) == "M5" and mobile_category({"cwe": "CWE-312"}) == "M9"
+        assert mobile_category({"owasp": "A06"}) == "M2" and mobile_category({"mobile": "M3", "cwe": 295}) == "M3"
+        scan = {"meta": {"project": "p", "date": "d", "mode": "full", "base": None, "changedFiles": None, "projects": projs,
+                         "stacks": ["react-native"], "outOfScope": 0}, "tools": [], "findings": got}
+        page = render(scan, {}, merge(scan, {}))
+        assert "OWASP Mobile Top 10 (2024)" in page and "Insufficient Binary Protections" in page and "Mobile M7" in page
+        scan["meta"]["projects"] = [p for p in projs if p["path"] == "api"]
+        assert "OWASP Mobile Top 10" not in render({**scan, "findings": []}, {}, []), "web-only repo must not get the mobile section"
 
     osv = {"results": [{"source": {"path": "/r/php/composer.lock"}, "packages": [
         {"package": {"name": "guzzlehttp/guzzle", "version": "7.4.0", "ecosystem": "Packagist"},
